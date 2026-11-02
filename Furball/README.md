@@ -17,10 +17,13 @@ npm run dev
 ```
 
 Abra o endereço que aparecer (normalmente http://localhost:5173).
-Controles: **WASD** para andar, **setas** para cuspir bolas de pelo, **R** para recomeçar
-depois de perder. Adicione `?debug` na URL para ver as colisões.
+O jogo abre na seleção de personagem: Preto (principal), Laranja, Siamês, Tricolor ou Frajola.
 
-O gato começa com 3 corações. Por enquanto, os espinhos no chão são a única fonte de dano.
+Controles: **WASD** para andar, **setas** para cuspir bolas de pelo. Depois de perder,
+**R** recomeça e **Esc** volta à seleção. Adicione `?debug` na URL para ver as colisões.
+
+O gato começa com 3 corações; os espinhos no chão tiram vida. No meio da sala há um gato
+cinza de teste: ele morre com 4 bolas de pelo e reaparece depois de alguns segundos.
 
 ## Estrutura
 
@@ -31,12 +34,14 @@ Furball/
 ├── src/
 │   ├── config.ts        # medidas da sala e da tela
 │   ├── main.ts          # inicia o Phaser
+│   ├── cats.ts          # lista de gatos jogáveis e posição da boca de cada um
 │   ├── objects/         # jogador, inimigos, projéteis...
-│   └── scenes/          # cenas (sala, menus, HUD)
+│   ├── scenes/          # carregamento, seleção de personagem, sala
+│   └── world/           # desenho da sala
 └── tools/               # scripts para recortar sprites das folhas
 ```
 
-Para regerar os sprites a partir das folhas: `python tools/extract_black_cat.py` e
+Para regerar os sprites a partir das folhas: `python tools/extract_cats.py` e
 `python tools/extract_ui.py`.
 
 ## Núcleo do jogo (MVP)

@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { CAT_FRAME_W, CATS, CatId } from '../cats';
 
 export type Facing = 'down' | 'up' | 'left' | 'right';
 
@@ -14,18 +15,13 @@ export const DIR_VECTOR: Record<Facing, Phaser.Math.Vector2> = {
   right: new Phaser.Math.Vector2(1, 0),
 };
 
-// Posição da boca em relação aos pés, já na escala do sprite: [x, altura].
-const MOUTH: Record<Facing, [number, number]> = {
-  down: [0, 27],
-  up: [0, 34],
-  left: [-18, 27],
-  right: [18, 27],
-};
-
 const SPEED = 270; // pixels por segundo
 const ACCEL = 14; // quão rápido atinge a velocidade (maior = mais "seco")
 const DECEL = 10; // quão rápido para ao soltar as teclas
 const SPRITE_SCALE = 0.8;
+const ORIGIN_Y = 0.97;
+// Altura da nuca no frame (de costas a bola sai de trás da cabeça).
+const HEAD_BACK_Y = 50;
 
 const FIRE_DELAY = 0.4; // segundos entre tiros
 const MOUTH_OPEN_TIME = 0.16; // quanto tempo a boca fica aberta após atirar
@@ -61,16 +57,31 @@ export class Player extends Phaser.Events.EventEmitter {
   private fireCooldown = 0;
   private mouthTimer = 0;
   private invulnerable = 0;
+  /** Boca em relação aos pés, já na escala do sprite: [x, altura]. */
+  private readonly mouth: Record<Facing, [number, number]>;
 
-  constructor(private readonly scene: Phaser.Scene, x: number, y: number) {
+  constructor(private readonly scene: Phaser.Scene, x: number, y: number, readonly cat: CatId) {
     super();
+    const feetY = 96 * ORIGIN_Y;
+    const toFeet = ([mx, my]: [number, number]): [number, number] => [
+      (mx - CAT_FRAME_W / 2) * SPRITE_SCALE,
+      (feetY - my) * SPRITE_SCALE,
+    ];
+    const m = CATS[cat].mouth;
+    this.mouth = {
+      down: toFeet(m.down),
+      left: toFeet(m.left),
+      right: toFeet(m.right),
+      up: toFeet([CAT_FRAME_W / 2, HEAD_BACK_Y]),
+    };
+
     this.body = scene.physics.add.body(x - FEET_W / 2, y - FEET_H / 2, FEET_W, FEET_H);
     this.body.setCollideWorldBounds(true);
 
     this.shadow = scene.add.ellipse(x, y, 54, 16, 0x000000, 0.35);
     this.sprite = scene.add
-      .sprite(x, y, 'cat_black', FRAME.down)
-      .setOrigin(0.5, 0.97)
+      .sprite(x, y, `cat_${cat}`, FRAME.down)
+      .setOrigin(0.5, ORIGIN_Y)
       .setScale(SPRITE_SCALE);
   }
 
@@ -112,12 +123,15 @@ export class Player extends Phaser.Events.EventEmitter {
     if (aim && this.fireCooldown === 0) {
       this.fireCooldown = FIRE_DELAY;
       this.mouthTimer = MOUTH_OPEN_TIME;
-      const [mx, mh] = MOUTH[aim];
+      // A bola nasce no centro da boca. No chão, fica 1px à frente (ou atrás, de costas)
+      // dos pés, para ser desenhada na frente do gato ou escondida atrás da cabeça.
+      const [mx, mh] = this.mouth[aim];
       const dir = DIR_VECTOR[aim];
+      const groundOffset = aim === 'up' ? -1 : 1;
       shot = {
-        x: this.feet.x + mx + dir.x * 6,
-        y: this.feet.y + dir.y * 6,
-        height: mh,
+        x: this.feet.x + mx,
+        y: this.feet.y + groundOffset,
+        height: mh + groundOffset,
         dir: dir.clone(),
         inherited: v.clone(),
       };

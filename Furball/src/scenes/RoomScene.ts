@@ -1,7 +1,10 @@
 import Phaser from 'phaser';
 import { FLOOR, GAME_HEIGHT, GAME_WIDTH, TILE, WALL } from '../config';
-import { Furball, createFurballTexture } from '../objects/Furball';
+import { CatId } from '../cats';
+import { DummyCat } from '../objects/DummyCat';
+import { FURBALL_HIT_RADIUS, Furball, createFurballTexture } from '../objects/Furball';
 import { Facing, MAX_HP, Player } from '../objects/Player';
+import { drawRoom } from '../world/room';
 
 type MoveKeys = Record<'w' | 'a' | 's' | 'd', Phaser.Input.Keyboard.Key>;
 type AimKeys = Record<Facing, Phaser.Input.Keyboard.Key>;
@@ -13,7 +16,9 @@ const SPIKES: [number, number][] = [
 ];
 
 export class RoomScene extends Phaser.Scene {
+  private cat: CatId = 'black';
   private player!: Player;
+  private dummy!: DummyCat;
   private moveKeys!: MoveKeys;
   private aimKeys!: AimKeys;
   private furballs: Furball[] = [];
@@ -26,20 +31,24 @@ export class RoomScene extends Phaser.Scene {
     super('Room');
   }
 
-  preload() {
-    this.load.spritesheet('cat_black', 'assets/cat_black.png', { frameWidth: 80, frameHeight: 96 });
-    this.load.spritesheet('hearts', 'assets/hearts.png', { frameWidth: 32, frameHeight: 30 });
+  init(data: { cat?: CatId }) {
+    if (data.cat) this.cat = data.cat;
   }
 
   create() {
     this.furballs = [];
     this.spikeRects = [];
-    createFurballTexture(this);
-    this.drawRoom();
+    createFurballTexture(this, this.cat);
+    drawRoom(this);
     this.drawSpikes();
 
     this.physics.world.setBounds(FLOOR.x, FLOOR.y, FLOOR.width, FLOOR.height);
-    this.player = new Player(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + TILE);
+
+    // Gato de teste parado no meio da sala.
+    this.dummy = new DummyCat(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 12, 'gray');
+
+    this.player = new Player(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + TILE * 2.5, this.cat);
+    this.physics.add.collider(this.player.body, this.dummy.body);
     this.player.on('hp', (hp: number) => this.updateHearts(hp, true));
     this.player.on('dead', () => this.showGameOver());
 
@@ -84,10 +93,19 @@ export class RoomScene extends Phaser.Scene {
 
     const shot = this.player.update(this.move, aim, dt, time);
     if (shot) {
-      this.furballs.push(new Furball(this, shot.x, shot.y, shot.dir, shot.height, shot.inherited));
+      this.furballs.push(new Furball(this, this.cat, shot.x, shot.y, shot.dir, shot.height, shot.inherited));
     }
 
-    for (const f of this.furballs) f.update(dt);
+    for (const f of this.furballs) {
+      f.update(dt);
+      const { x, y } = f.position;
+      if (!f.dead && this.dummy.hits(x, y, FURBALL_HIT_RADIUS)) {
+        const d = f.direction;
+        f.burst();
+        this.dummy.takeHit(d.x, d.y);
+      }
+    }
+    this.dummy.update(time);
     this.furballs = this.furballs.filter((f) => !f.dead);
 
     this.checkSpikes();
@@ -157,102 +175,19 @@ export class RoomScene extends Phaser.Scene {
       .setAlpha(0)
       .setDepth(30_001);
     const sub = this.add
-      .text(cx, cy + 34, 'Pressione R para recomeçar', { ...style, fontSize: '20px', strokeThickness: 4 })
+      .text(cx, cy + 34, 'R para recomeçar  ·  Esc para trocar de gato', { ...style, fontSize: '20px', strokeThickness: 4 })
       .setOrigin(0.5)
       .setAlpha(0)
       .setDepth(30_001);
     this.tweens.add({ targets: overlay, fillAlpha: 0.55, duration: 600, delay: 400 });
     this.tweens.add({ targets: [title, sub], alpha: 1, duration: 600, delay: 600 });
 
-    this.input.keyboard!.once('keydown-R', () => this.scene.restart());
+    const kb = this.input.keyboard!;
+    kb.once('keydown-R', () => this.scene.restart({ cat: this.cat }));
+    kb.once('keydown-ESC', () => this.scene.start('Select', { cat: this.cat }));
   }
 
   // ---------- Cenário ----------
-
-  /** Desenha uma sala de porão: paredes de pedra, chão de tábuas e quatro portas. */
-  private drawRoom() {
-    const rng = new Phaser.Math.RandomDataGenerator(['furball']);
-    const g = this.add.graphics().setDepth(-100);
-    const shade = (base: number, spread: number) => {
-      const c = Phaser.Display.Color.IntegerToColor(base);
-      const d = rng.between(-spread, spread);
-      return Phaser.Display.Color.GetColor(
-        Phaser.Math.Clamp(c.red + d, 0, 255),
-        Phaser.Math.Clamp(c.green + d, 0, 255),
-        Phaser.Math.Clamp(c.blue + d, 0, 255),
-      );
-    };
-
-    // Paredes: tijolos de pedra cobrindo a tela inteira (o chão é desenhado por cima).
-    g.fillStyle(0x1b1614).fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
-    const bw = 40;
-    const bh = 22;
-    for (let row = 0; row * bh < GAME_HEIGHT; row++) {
-      const offset = row % 2 ? bw / 2 : 0;
-      for (let x = -offset; x < GAME_WIDTH; x += bw) {
-        g.fillStyle(shade(0x463d38, 10)).fillRect(x + 2, row * bh + 2, bw - 4, bh - 4);
-        g.fillStyle(0x5a4f49, 0.5).fillRect(x + 2, row * bh + 2, bw - 4, 3);
-      }
-    }
-
-    // Sombra das paredes escurecendo em direção ao chão (dá profundidade).
-    for (let i = 0; i < 6; i++) {
-      const inset = WALL - 6 - i * 8;
-      g.lineStyle(8, 0x000000, 0.08 + i * 0.05);
-      g.strokeRect(inset + 4, inset + 4, GAME_WIDTH - (inset + 4) * 2, GAME_HEIGHT - (inset + 4) * 2);
-    }
-
-    // Chão: tábuas horizontais de madeira.
-    const plankH = 32;
-    for (let y = FLOOR.y; y < FLOOR.y + FLOOR.height; y += plankH) {
-      let x = FLOOR.x - rng.between(0, 120);
-      while (x < FLOOR.x + FLOOR.width) {
-        const len = rng.between(110, 230);
-        const x0 = Math.max(x, FLOOR.x);
-        const x1 = Math.min(x + len, FLOOR.x + FLOOR.width);
-        g.fillStyle(shade(0x6e4b33, 9)).fillRect(x0, y, x1 - x0, plankH);
-        g.fillStyle(0x8a6244, 0.35).fillRect(x0, y + 2, x1 - x0, 2);
-        // Veios da madeira
-        for (let v = 0; v < 2; v++) {
-          const vy = y + rng.between(8, plankH - 6);
-          const vx = rng.between(x0, Math.max(x0, x1 - 40));
-          g.fillStyle(0x4f3423, 0.4).fillRect(vx, vy, rng.between(20, 60), 2);
-        }
-        g.fillStyle(0x3a2619).fillRect(x1 - 2, y, 2, plankH); // junta entre tábuas
-        x += len;
-      }
-      g.fillStyle(0x34221a).fillRect(FLOOR.x, y + plankH - 2, FLOOR.width, 2);
-    }
-
-    // Manchas e sujeira espalhadas
-    for (let i = 0; i < 10; i++) {
-      g.fillStyle(0x2a1a12, rng.realInRange(0.08, 0.18));
-      g.fillEllipse(
-        rng.between(FLOOR.x + 40, FLOOR.x + FLOOR.width - 40),
-        rng.between(FLOOR.y + 30, FLOOR.y + FLOOR.height - 30),
-        rng.between(30, 90),
-        rng.between(14, 40),
-      );
-    }
-
-    // Sombra que as paredes projetam no chão (mais forte em cima).
-    for (let i = 0; i < 5; i++) {
-      g.fillStyle(0x000000, 0.12 - i * 0.02);
-      g.fillRect(FLOOR.x, FLOOR.y, FLOOR.width, 28 - i * 5);
-      g.fillRect(FLOOR.x, FLOOR.y, 18 - i * 3, FLOOR.height);
-      g.fillRect(FLOOR.x + FLOOR.width - (18 - i * 3), FLOOR.y, 18 - i * 3, FLOOR.height);
-      g.fillRect(FLOOR.x, FLOOR.y + FLOOR.height - (12 - i * 2), FLOOR.width, 12 - i * 2);
-    }
-    g.lineStyle(3, 0x120e0c).strokeRect(FLOOR.x, FLOOR.y, FLOOR.width, FLOOR.height);
-
-    // Portas (fechadas por enquanto) no meio de cada parede.
-    const cx = GAME_WIDTH / 2;
-    const cy = GAME_HEIGHT / 2;
-    this.drawDoor(g, cx, WALL / 2, 0);
-    this.drawDoor(g, cx, GAME_HEIGHT - WALL / 2, Math.PI);
-    this.drawDoor(g, WALL / 2, cy, -Math.PI / 2);
-    this.drawDoor(g, GAME_WIDTH - WALL / 2, cy, Math.PI / 2);
-  }
 
   /** Placas de espinhos de metal; tocar nelas tira um coração. */
   private drawSpikes() {
@@ -275,19 +210,5 @@ export class RoomScene extends Phaser.Scene {
       }
       this.spikeRects.push(new Phaser.Geom.Rectangle(x + 10, y + 10, TILE - 20, TILE - 20));
     }
-  }
-
-  private drawDoor(g: Phaser.GameObjects.Graphics, x: number, y: number, rotation: number) {
-    // Desenha uma porta voltada para cima e gira em torno do centro.
-    const pts = (list: number[][]) =>
-      list.map(([px, py]) => {
-        const p = new Phaser.Math.Vector2(px, py).rotate(rotation);
-        return new Phaser.Math.Vector2(x + p.x, y + p.y);
-      });
-
-    g.fillStyle(0x5c514b).fillPoints(pts([[-56, 32], [-56, -18], [-40, -32], [40, -32], [56, -18], [56, 32]]), true);
-    g.fillStyle(0x2c2522).fillPoints(pts([[-42, 32], [-42, -14], [-30, -22], [30, -22], [42, -14], [42, 32]]), true);
-    g.fillStyle(0x0a0807).fillPoints(pts([[-34, 32], [-34, -10], [-24, -16], [24, -16], [34, -10], [34, 32]]), true);
-    g.lineStyle(3, 0x171210).strokePoints(pts([[-56, 32], [-56, -18], [-40, -32], [40, -32], [56, -18], [56, 32]]), false);
   }
 }
