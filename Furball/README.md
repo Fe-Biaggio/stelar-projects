@@ -17,7 +17,10 @@ npm run dev
 ```
 
 Abra o endereço que aparecer (normalmente http://localhost:5173).
-Controles: **WASD** ou **setas** para mover. Adicione `?debug` na URL para ver as colisões.
+Controles: **WASD** para andar, **setas** para cuspir bolas de pelo, **R** para recomeçar
+depois de perder. Adicione `?debug` na URL para ver as colisões.
+
+O gato começa com 3 corações. Por enquanto, os espinhos no chão são a única fonte de dano.
 
 ## Estrutura
 
@@ -33,7 +36,8 @@ Furball/
 └── tools/               # scripts para recortar sprites das folhas
 ```
 
-Para regerar o sprite do gato preto: `python tools/extract_black_cat.py`.
+Para regerar os sprites a partir das folhas: `python tools/extract_black_cat.py` e
+`python tools/extract_ui.py`.
 
 ## Núcleo do jogo (MVP)
 
