@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "furball",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "Furball", "run", "dev"],
+      "port": 5173
+    }
+  ]
+}
