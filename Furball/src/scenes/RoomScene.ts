@@ -25,6 +25,7 @@ export class RoomScene extends Phaser.Scene {
   private spikeRects: Phaser.Geom.Rectangle[] = [];
   private hearts: Phaser.GameObjects.Image[] = [];
   private hint?: Phaser.GameObjects.Text;
+  private leaving = false;
   private readonly move = new Phaser.Math.Vector2();
 
   constructor() {
@@ -36,6 +37,7 @@ export class RoomScene extends Phaser.Scene {
   }
 
   create() {
+    this.leaving = false;
     this.furballs = [];
     this.spikeRects = [];
     createFurballTexture(this, this.cat);
@@ -57,6 +59,7 @@ export class RoomScene extends Phaser.Scene {
     this.moveKeys = kb.addKeys({ w: K.W, a: K.A, s: K.S, d: K.D }) as MoveKeys;
     this.aimKeys = kb.addKeys({ up: K.UP, down: K.DOWN, left: K.LEFT, right: K.RIGHT }) as AimKeys;
     kb.addCapture([K.UP, K.DOWN, K.LEFT, K.RIGHT]); // não rolar a página com as setas
+    kb.on('keydown-ESC', () => this.backToSelect());
 
     this.createHud();
 
@@ -150,6 +153,40 @@ export class RoomScene extends Phaser.Scene {
       );
     }
     this.updateHearts(this.player.hp, false);
+    this.createMenuButton();
+  }
+
+  /** Botão no canto superior direito que volta para a seleção de personagem. */
+  private createMenuButton() {
+    const w = 132;
+    const h = 34;
+    const x = GAME_WIDTH - 20 - w / 2;
+    const y = 14 + h / 2;
+    const bg = this.add.graphics();
+    const draw = (hover: boolean) => {
+      bg.clear();
+      bg.fillStyle(hover ? 0x5a4a3c : 0x2a2220, 0.92).fillRoundedRect(-w / 2, -h / 2, w, h, 8);
+      bg.lineStyle(2, hover ? 0xf2c879 : 0x8a7a6a).strokeRoundedRect(-w / 2, -h / 2, w, h, 8);
+    };
+    draw(false);
+    const label = this.add
+      .text(0, 0, '↺ Início (Esc)', { fontFamily: 'monospace', fontSize: '15px', color: '#e8d9c4' })
+      .setOrigin(0.5);
+    const button = this.add.container(x, y, [bg, label]).setDepth(40_000).setSize(w, h);
+    button.setInteractive({ useHandCursor: true });
+    button.on('pointerover', () => draw(true));
+    button.on('pointerout', () => draw(false));
+    button.on('pointerdown', () => this.backToSelect());
+  }
+
+  /** Volta para a tela de seleção, mantendo o gato atual pré-selecionado. */
+  private backToSelect() {
+    if (this.leaving) return;
+    this.leaving = true;
+    this.cameras.main.fadeOut(200);
+    this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () =>
+      this.scene.start('Select', { cat: this.cat }),
+    );
   }
 
   private updateHearts(hp: number, animate: boolean) {
@@ -184,7 +221,6 @@ export class RoomScene extends Phaser.Scene {
 
     const kb = this.input.keyboard!;
     kb.once('keydown-R', () => this.scene.restart({ cat: this.cat }));
-    kb.once('keydown-ESC', () => this.scene.start('Select', { cat: this.cat }));
   }
 
   // ---------- Cenário ----------

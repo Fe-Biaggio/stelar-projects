@@ -19,8 +19,9 @@ npm run dev
 Abra o endereço que aparecer (normalmente http://localhost:5173).
 O jogo abre na seleção de personagem: Preto (principal), Laranja, Siamês, Tricolor ou Frajola.
 
-Controles: **WASD** para andar, **setas** para cuspir bolas de pelo. Depois de perder,
-**R** recomeça e **Esc** volta à seleção. Adicione `?debug` na URL para ver as colisões.
+Controles: **WASD** para andar, **setas** para cuspir bolas de pelo. O botão **Início**
+(canto superior direito) ou **Esc** volta à seleção a qualquer momento. Depois de perder,
+**R** recomeça com o mesmo gato. Adicione `?debug` na URL para ver as colisões.
 
 O gato começa com 3 corações; os espinhos no chão tiram vida. No meio da sala há um gato
 cinza de teste: ele morre com 4 bolas de pelo e reaparece depois de alguns segundos.
