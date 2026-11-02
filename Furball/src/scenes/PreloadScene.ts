@@ -14,6 +14,7 @@ export class PreloadScene extends Phaser.Scene {
       .setOrigin(0.5);
     loadCatSheets(this);
     this.load.spritesheet('hearts', 'assets/hearts.png', { frameWidth: 32, frameHeight: 30 });
+    this.load.spritesheet('items', 'assets/items.png', { frameWidth: 64, frameHeight: 64 });
   }
 
   create() {

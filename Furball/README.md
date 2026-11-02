@@ -26,6 +26,23 @@ Controles: **WASD** para andar, **setas** para cuspir bolas de pelo. O botão **
 O gato começa com 3 corações; os espinhos no chão tiram vida. No meio da sala há um gato
 cinza de teste: ele morre com 4 bolas de pelo e reaparece depois de alguns segundos.
 
+### Itens
+
+Cada item soma **+0,2x** no status (todos começam em 1x). O painel pequeno no canto
+superior direito mostra os valores atuais.
+
+| Item | Efeito |
+|---|---|
+| Comida enlatada | +1 coração (e cura esse coração) |
+| Catnip | Velocidade de movimento |
+| Escovinha | Cadência (tiros por segundo) |
+| Churu | Sorte (para baús, no futuro) |
+| Bolinha de lã | Velocidade do tiro |
+| Peixe fresco | Dano |
+| Leitinho | Tamanho da bola de pelo |
+
+Na sala de teste há um de cada no chão; R ou Esc recomeçam com os status zerados.
+
 ## Estrutura
 
 ```
@@ -36,14 +53,16 @@ Furball/
 │   ├── config.ts        # medidas da sala e da tela
 │   ├── main.ts          # inicia o Phaser
 │   ├── cats.ts          # lista de gatos jogáveis e posição da boca de cada um
+│   ├── items.ts         # itens coletáveis e seus efeitos
+│   ├── stats.ts         # status do gato (multiplicadores)
 │   ├── objects/         # jogador, inimigos, projéteis...
 │   ├── scenes/          # carregamento, seleção de personagem, sala
 │   └── world/           # desenho da sala
 └── tools/               # scripts para recortar sprites das folhas
 ```
 
-Para regerar os sprites a partir das folhas: `python tools/extract_cats.py` e
-`python tools/extract_ui.py`.
+Para regerar os sprites a partir das folhas: `python tools/extract_cats.py`,
+`python tools/extract_ui.py` e `python tools/extract_items.py`.
 
 ## Núcleo do jogo (MVP)
 

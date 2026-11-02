@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 import { CAT_FRAME_W, CATS, CatId } from '../cats';
+import { ItemInfo, applyItem } from '../items';
+import { Stats, newStats } from '../stats';
 
 export type Facing = 'down' | 'up' | 'left' | 'right';
 
@@ -15,7 +17,7 @@ export const DIR_VECTOR: Record<Facing, Phaser.Math.Vector2> = {
   right: new Phaser.Math.Vector2(1, 0),
 };
 
-const SPEED = 270; // pixels por segundo
+const SPEED = 270; // pixels por segundo (com velocidade 1x)
 const ACCEL = 14; // quão rápido atinge a velocidade (maior = mais "seco")
 const DECEL = 10; // quão rápido para ao soltar as teclas
 const SPRITE_SCALE = 0.8;
@@ -23,10 +25,9 @@ const ORIGIN_Y = 0.97;
 // Altura da nuca no frame (de costas a bola sai de trás da cabeça).
 const HEAD_BACK_Y = 50;
 
-const FIRE_DELAY = 0.4; // segundos entre tiros
+const FIRE_DELAY = 0.4; // segundos entre tiros (com cadência 1x)
 const MOUTH_OPEN_TIME = 0.16; // quanto tempo a boca fica aberta após atirar
 
-export const MAX_HP = 3;
 const INVULNERABLE_TIME = 1.0; // segundos piscando após levar dano
 const KNOCKBACK = 380;
 
@@ -40,16 +41,19 @@ export interface ShotRequest {
   height: number;
   dir: Phaser.Math.Vector2;
   inherited: Phaser.Math.Vector2;
+  stats: Stats;
 }
 
 /**
  * O gato jogador. Eventos emitidos:
- *  - 'hp' (hp: number) quando a vida muda
+ *  - 'hp' (hp: number, maxHp: number) quando a vida muda
+ *  - 'stats' (stats: Stats) quando um item muda os status
  *  - 'dead' quando a vida chega a zero
  */
 export class Player extends Phaser.Events.EventEmitter {
   readonly body: Phaser.Physics.Arcade.Body;
-  hp = MAX_HP;
+  readonly stats: Stats = newStats();
+  hp = this.stats.maxHp;
   private readonly sprite: Phaser.GameObjects.Sprite;
   private readonly shadow: Phaser.GameObjects.Ellipse;
   private facing: Facing = 'down';
@@ -111,8 +115,9 @@ export class Player extends Phaser.Events.EventEmitter {
     // Aceleração suave, igual em qualquer taxa de quadros.
     const k = 1 - Math.exp(-(moving ? ACCEL : DECEL) * dt);
     const v = this.body.velocity;
-    v.x += (move.x * SPEED - v.x) * k;
-    v.y += (move.y * SPEED - v.y) * k;
+    const speed = SPEED * this.stats.speed;
+    v.x += (move.x * speed - v.x) * k;
+    v.y += (move.y * speed - v.y) * k;
     if (!moving && v.lengthSq() < 4) v.reset();
 
     // Atirando, o gato olha para onde atira; senão, para onde anda.
@@ -121,7 +126,7 @@ export class Player extends Phaser.Events.EventEmitter {
 
     let shot: ShotRequest | null = null;
     if (aim && this.fireCooldown === 0) {
-      this.fireCooldown = FIRE_DELAY;
+      this.fireCooldown = FIRE_DELAY / this.stats.fireRate;
       this.mouthTimer = MOUTH_OPEN_TIME;
       // A bola nasce no centro da boca. No chão, fica 1px à frente (ou atrás, de costas)
       // dos pés, para ser desenhada na frente do gato ou escondida atrás da cabeça.
@@ -134,6 +139,7 @@ export class Player extends Phaser.Events.EventEmitter {
         height: mh + groundOffset,
         dir: dir.clone(),
         inherited: v.clone(),
+        stats: this.stats,
       };
       // Pequeno "solavanco" ao cuspir
       this.scene.tweens.add({
@@ -154,7 +160,7 @@ export class Player extends Phaser.Events.EventEmitter {
   takeDamage(amount: number, fromX: number, fromY: number) {
     if (this.dead || this.invulnerable > 0) return;
     this.hp = Math.max(0, this.hp - amount);
-    this.emit('hp', this.hp);
+    this.emit('hp', this.hp, this.stats.maxHp);
 
     const push = new Phaser.Math.Vector2(this.feet.x - fromX, this.feet.y - fromY);
     if (push.lengthSq() === 0) push.set(0, 1);
@@ -170,6 +176,24 @@ export class Player extends Phaser.Events.EventEmitter {
     } else {
       this.invulnerable = INVULNERABLE_TIME;
     }
+  }
+
+  /** Pega um item: aplica nos status e faz o gato comemorar. */
+  collect(item: ItemInfo) {
+    applyItem(this.stats, item);
+    if (item.stat === 'maxHp') {
+      this.hp += 1; // a lata também cura o coração novo
+      this.emit('hp', this.hp, this.stats.maxHp);
+    }
+    this.emit('stats', this.stats);
+    this.scene.tweens.add({
+      targets: this.sprite,
+      scaleX: SPRITE_SCALE * 0.9,
+      scaleY: SPRITE_SCALE * 1.15,
+      duration: 110,
+      yoyo: true,
+      ease: 'Quad.Out',
+    });
   }
 
   private die() {
@@ -203,7 +227,7 @@ export class Player extends Phaser.Events.EventEmitter {
     this.shadow.setDepth(feetY - 1);
 
     // Só há um quadro por direção, então o andar é animado com pulinhos e balanço.
-    const speedRatio = Math.min(this.body.velocity.length() / SPEED, 1);
+    const speedRatio = Math.min(this.body.velocity.length() / (SPEED * this.stats.speed), 1);
     const tweening = this.scene.tweens.isTweening(this.sprite);
     if (speedRatio > 0.1) {
       this.walkTime += dt * 11 * speedRatio;

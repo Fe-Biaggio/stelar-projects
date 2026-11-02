@@ -2,7 +2,7 @@ import Phaser from 'phaser';
 import { CatId } from '../cats';
 
 const SPRITE_SCALE = 0.8;
-const MAX_HP = 4; // bolas de pelo até morrer
+const MAX_HP = 4; // vida: 4 bolas de pelo com dano 1x
 const RESPAWN_DELAY = 2500; // ms até um novo gato de teste aparecer
 
 // Área de acerto em volta dos pés (elipse), em pixels.
@@ -13,6 +13,8 @@ const HIT_RY = 34;
 const BODY_W = 44;
 const BODY_H = 24;
 
+const HP_BAR_W = 48;
+
 const FRAME_IDLE = 0;
 const FRAME_OUCH = 4; // boca aberta
 
@@ -22,7 +24,8 @@ export class DummyCat {
   readonly body: Phaser.Physics.Arcade.StaticBody;
   private readonly sprite: Phaser.GameObjects.Sprite;
   private readonly shadow: Phaser.GameObjects.Ellipse;
-  private readonly pips: Phaser.GameObjects.Arc[] = [];
+  private readonly hpBar: Phaser.GameObjects.Rectangle;
+  private readonly hpBarBg: Phaser.GameObjects.Rectangle;
   private hurtTimer?: Phaser.Time.TimerEvent;
 
   constructor(
@@ -39,15 +42,14 @@ export class DummyCat {
       .setScale(SPRITE_SCALE)
       .setDepth(y);
 
-    // Bolinhas de vida acima da cabeça (só para o teste).
-    for (let i = 0; i < MAX_HP; i++) {
-      this.pips.push(
-        scene.add
-          .circle(x + (i - (MAX_HP - 1) / 2) * 12, y - 92, 4, 0xd63a3a)
-          .setStrokeStyle(2, 0x1a0e0e)
-          .setDepth(10_000),
-      );
-    }
+    // Barra de vida acima da cabeça (só para o teste).
+    this.hpBarBg = scene.add
+      .rectangle(x, y - 92, HP_BAR_W + 4, 10, 0x1a0e0e)
+      .setDepth(10_000);
+    this.hpBar = scene.add
+      .rectangle(x - HP_BAR_W / 2, y - 92, HP_BAR_W, 6, 0xd63a3a)
+      .setOrigin(0, 0.5)
+      .setDepth(10_001);
   }
 
   get alive() {
@@ -63,10 +65,10 @@ export class DummyCat {
   }
 
   /** Recebe um tiro vindo na direção (dirX, dirY). */
-  takeHit(dirX: number, dirY: number) {
+  takeHit(dirX: number, dirY: number, damage: number) {
     if (!this.alive) return;
-    this.hp -= 1;
-    this.updatePips();
+    this.hp = Math.max(0, Math.round((this.hp - damage) * 100) / 100);
+    this.updateBar();
 
     // Pisca branco, abre a boca e é empurrado um pouco na direção do tiro.
     this.sprite.setTintFill(0xffffff);
@@ -121,7 +123,7 @@ export class DummyCat {
   private respawn() {
     if (!this.sprite.active) return; // cena reiniciada
     this.hp = MAX_HP;
-    this.updatePips();
+    this.updateBar();
     this.body.enable = true;
     this.sprite.setFrame(FRAME_IDLE).setAngle(0).setPosition(this.x, this.y).setScale(SPRITE_SCALE * 0.2);
     this.shadow.setScale(1);
@@ -129,8 +131,8 @@ export class DummyCat {
     this.scene.tweens.add({ targets: this.sprite, scale: SPRITE_SCALE, duration: 350, ease: 'Back.Out' });
   }
 
-  private updatePips() {
-    this.pips.forEach((pip, i) => pip.setFillStyle(i < this.hp ? 0xd63a3a : 0x3a2a2a));
+  private updateBar() {
+    this.hpBar.width = HP_BAR_W * (this.hp / MAX_HP);
   }
 
   /** Respiração parada, para não parecer uma estátua. */

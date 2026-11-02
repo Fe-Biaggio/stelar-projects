@@ -1,14 +1,14 @@
 import Phaser from 'phaser';
 import { CatId } from '../cats';
 import { FLOOR } from '../config';
+import { Stats } from '../stats';
 
-const SHOT_SPEED = 430; // pixels por segundo
+const SHOT_SPEED = 430; // pixels por segundo (com velocidade do tiro 1x)
 const RANGE = 220; // distância percorrida antes de começar a cair (~5 tiles no total, com a queda)
 const FALL_GRAVITY = 900; // aceleração da queda no fim do alcance
 const INHERIT = 0.35; // quanto da velocidade do gato passa para o tiro
 const RADIUS = 10; // raio na textura
 const SCALE = 0.7; // tamanho final na tela (30% menor que a textura)
-export const FURBALL_HIT_RADIUS = RADIUS * SCALE;
 
 /** Cores da bola de pelo de cada gato: contorno, base, fios internos e brilho. */
 interface FurPalette {
@@ -69,6 +69,10 @@ export function createFurballTexture(scene: Phaser.Scene, cat: CatId) {
  */
 export class Furball {
   dead = false;
+  /** Dano causado ao acertar. */
+  readonly damage: number;
+  /** Raio usado nas colisões. */
+  readonly hitRadius: number;
   private readonly sprite: Phaser.GameObjects.Image;
   private readonly shadow: Phaser.GameObjects.Ellipse;
   private readonly vx: number;
@@ -86,15 +90,20 @@ export class Furball {
     dir: Phaser.Math.Vector2,
     startHeight: number,
     inherited: Phaser.Math.Vector2,
+    stats: Stats,
   ) {
-    this.vx = dir.x * SHOT_SPEED + inherited.x * INHERIT;
-    this.vy = dir.y * SHOT_SPEED + inherited.y * INHERIT;
+    const speed = SHOT_SPEED * stats.shotSpeed;
+    this.vx = dir.x * speed + inherited.x * INHERIT;
+    this.vy = dir.y * speed + inherited.y * INHERIT;
+    this.damage = stats.damage;
+    const scale = SCALE * stats.size;
+    this.hitRadius = RADIUS * scale;
     this.height = startHeight;
     this.palette = PALETTES[cat];
-    this.shadow = scene.add.ellipse(x, y, 13, 5, 0x000000, 0.3);
-    this.sprite = scene.add.image(x, y - startHeight, `furball_${cat}`).setScale(SCALE * 0.25);
+    this.shadow = scene.add.ellipse(x, y, 13 * stats.size, 5 * stats.size, 0x000000, 0.3);
+    this.sprite = scene.add.image(x, y - startHeight, `furball_${cat}`).setScale(scale * 0.25);
     // Sai de dentro da boca crescendo rapidinho
-    scene.tweens.add({ targets: this.sprite, scale: SCALE, duration: 110, ease: 'Back.Out' });
+    scene.tweens.add({ targets: this.sprite, scale, duration: 110, ease: 'Back.Out' });
     this.sync();
   }
 

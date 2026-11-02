@@ -2,8 +2,11 @@ import Phaser from 'phaser';
 import { FLOOR, GAME_HEIGHT, GAME_WIDTH, TILE, WALL } from '../config';
 import { CatId } from '../cats';
 import { DummyCat } from '../objects/DummyCat';
-import { FURBALL_HIT_RADIUS, Furball, createFurballTexture } from '../objects/Furball';
-import { Facing, MAX_HP, Player } from '../objects/Player';
+import { ItemId } from '../items';
+import { Furball, createFurballTexture } from '../objects/Furball';
+import { ItemPickup } from '../objects/ItemPickup';
+import { Facing, Player } from '../objects/Player';
+import { STAT_LABELS, Stats, formatMult } from '../stats';
 import { drawRoom } from '../world/room';
 
 type MoveKeys = Record<'w' | 'a' | 's' | 'd', Phaser.Input.Keyboard.Key>;
@@ -15,6 +18,17 @@ const SPIKES: [number, number][] = [
   [10, 5],
 ];
 
+// Itens de teste espalhados pela sala (id, coluna, linha em tiles do chão).
+const TEST_ITEMS: [ItemId, number, number][] = [
+  ['can', 4, 1],
+  ['catnip', 6, 1],
+  ['brush', 8, 1],
+  ['churu', 10, 1],
+  ['yarn', 2, 5],
+  ['fish', 4, 5],
+  ['milk', 8, 5],
+];
+
 export class RoomScene extends Phaser.Scene {
   private cat: CatId = 'black';
   private player!: Player;
@@ -24,6 +38,9 @@ export class RoomScene extends Phaser.Scene {
   private furballs: Furball[] = [];
   private spikeRects: Phaser.Geom.Rectangle[] = [];
   private hearts: Phaser.GameObjects.Image[] = [];
+  private items: ItemPickup[] = [];
+  private statTexts = new Map<keyof Stats, Phaser.GameObjects.Text>();
+  private banner?: Phaser.GameObjects.Container;
   private hint?: Phaser.GameObjects.Text;
   private leaving = false;
   private readonly move = new Phaser.Math.Vector2();
@@ -40,6 +57,9 @@ export class RoomScene extends Phaser.Scene {
     this.leaving = false;
     this.furballs = [];
     this.spikeRects = [];
+    this.items = [];
+    this.hearts = [];
+    this.banner = undefined;
     createFurballTexture(this, this.cat);
     drawRoom(this);
     this.drawSpikes();
@@ -51,7 +71,14 @@ export class RoomScene extends Phaser.Scene {
 
     this.player = new Player(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + TILE * 2.5, this.cat);
     this.physics.add.collider(this.player.body, this.dummy.body);
-    this.player.on('hp', (hp: number) => this.updateHearts(hp, true));
+    this.player.on('hp', (hp: number, maxHp: number) => this.updateHearts(hp, maxHp, true));
+    this.player.on('stats', (stats: Stats) => this.updateStats(stats));
+
+    for (const [id, col, row] of TEST_ITEMS) {
+      const x = FLOOR.x + (col + 0.5) * TILE;
+      const y = FLOOR.y + (row + 0.5) * TILE + 14;
+      this.items.push(new ItemPickup(this, x, y, id));
+    }
     this.player.on('dead', () => this.showGameOver());
 
     const kb = this.input.keyboard!;
@@ -96,22 +123,38 @@ export class RoomScene extends Phaser.Scene {
 
     const shot = this.player.update(this.move, aim, dt, time);
     if (shot) {
-      this.furballs.push(new Furball(this, this.cat, shot.x, shot.y, shot.dir, shot.height, shot.inherited));
+      this.furballs.push(
+        new Furball(this, this.cat, shot.x, shot.y, shot.dir, shot.height, shot.inherited, shot.stats),
+      );
     }
 
     for (const f of this.furballs) {
       f.update(dt);
       const { x, y } = f.position;
-      if (!f.dead && this.dummy.hits(x, y, FURBALL_HIT_RADIUS)) {
+      if (!f.dead && this.dummy.hits(x, y, f.hitRadius)) {
         const d = f.direction;
         f.burst();
-        this.dummy.takeHit(d.x, d.y);
+        this.dummy.takeHit(d.x, d.y, f.damage);
       }
     }
     this.dummy.update(time);
     this.furballs = this.furballs.filter((f) => !f.dead);
 
     this.checkSpikes();
+    this.checkItems(time);
+  }
+
+  private checkItems(time: number) {
+    const feet = this.player.feet;
+    for (const item of this.items) {
+      item.update(time);
+      if (!this.player.dead && item.touches(feet.x, feet.y)) {
+        item.collect(feet.x, feet.y);
+        this.player.collect(item.info);
+        this.showBanner(item.info.name, item.info.effect);
+      }
+    }
+    this.items = this.items.filter((i) => !i.collected);
   }
 
   /** A seta pressionada por último manda, como no Isaac. */
@@ -143,17 +186,69 @@ export class RoomScene extends Phaser.Scene {
   // ---------- HUD ----------
 
   private createHud() {
-    this.hearts = [];
-    for (let i = 0; i < MAX_HP; i++) {
-      this.hearts.push(
-        this.add
-          .image(26 + i * 34, 22, 'hearts', 0)
-          .setOrigin(0, 0)
-          .setDepth(20_000),
-      );
-    }
-    this.updateHearts(this.player.hp, false);
+    this.updateHearts(this.player.hp, this.player.stats.maxHp, false);
     this.createMenuButton();
+    this.createStatsPanel();
+  }
+
+  /** Painel pequeno com os status, abaixo do botão Início (para testes durante o desenvolvimento). */
+  private createStatsPanel() {
+    const right = GAME_WIDTH - 20;
+    const top = 58;
+    const lineH = 15;
+    const w = 132;
+    this.add
+      .rectangle(right, top - 4, w, STAT_LABELS.length * lineH + 8, 0x120e0c, 0.6)
+      .setOrigin(1, 0)
+      .setDepth(40_000);
+    this.statTexts.clear();
+    STAT_LABELS.forEach(([key, label], i) => {
+      const y = top + i * lineH;
+      this.add
+        .text(right - w + 8, y, label, { fontFamily: 'monospace', fontSize: '12px', color: '#b8a898' })
+        .setDepth(40_001);
+      this.statTexts.set(
+        key,
+        this.add
+          .text(right - 8, y, '', { fontFamily: 'monospace', fontSize: '12px', color: '#e8d9c4' })
+          .setOrigin(1, 0)
+          .setDepth(40_001),
+      );
+    });
+    this.updateStats(this.player.stats, false);
+  }
+
+  private updateStats(stats: Stats, flash = true) {
+    for (const [key] of STAT_LABELS) {
+      const text = this.statTexts.get(key)!;
+      const value = key === 'maxHp' ? `${stats.maxHp}` : formatMult(stats[key]);
+      if (flash && text.text !== value) {
+        // Destaca em dourado o status que acabou de mudar
+        text.setColor('#f2c879').setScale(1.25);
+        this.tweens.add({ targets: text, scale: 1, duration: 300, ease: 'Back.Out' });
+        this.time.delayedCall(1200, () => text.active && text.setColor('#e8d9c4'));
+      }
+      text.setText(value);
+    }
+  }
+
+  /** Faixa no topo com o nome do item e o efeito, como no Isaac. */
+  private showBanner(title: string, subtitle: string) {
+    this.banner?.destroy();
+    const style = { fontFamily: 'monospace', color: '#e8d9c4', stroke: '#1a1210' };
+    const t1 = this.add.text(0, 0, title, { ...style, fontSize: '26px', strokeThickness: 6, color: '#f2c879' }).setOrigin(0.5);
+    const t2 = this.add.text(0, 30, subtitle, { ...style, fontSize: '16px', strokeThickness: 4 }).setOrigin(0.5);
+    const banner = this.add.container(GAME_WIDTH / 2, 110, [t1, t2]).setDepth(35_000).setAlpha(0);
+    this.banner = banner;
+    banner.y = 96;
+    this.tweens.add({ targets: banner, alpha: 1, y: 110, duration: 200, ease: 'Quad.Out' });
+    this.tweens.add({
+      targets: banner,
+      alpha: 0,
+      delay: 1800,
+      duration: 400,
+      onComplete: () => banner.destroy(),
+    });
   }
 
   /** Botão no canto superior direito que volta para a seleção de personagem. */
@@ -189,7 +284,19 @@ export class RoomScene extends Phaser.Scene {
     );
   }
 
-  private updateHearts(hp: number, animate: boolean) {
+  private updateHearts(hp: number, maxHp: number, animate: boolean) {
+    // Cria corações novos quando a vida máxima aumenta
+    while (this.hearts.length < maxHp) {
+      const heart = this.add
+        .image(26 + this.hearts.length * 34, 22, 'hearts', 1)
+        .setOrigin(0, 0)
+        .setDepth(20_000);
+      if (animate) {
+        heart.setScale(0);
+        this.tweens.add({ targets: heart, scale: 1, duration: 300, ease: 'Back.Out' });
+      }
+      this.hearts.push(heart);
+    }
     this.hearts.forEach((heart, i) => {
       const wasFull = heart.frame.name === '0';
       const full = i < hp;
