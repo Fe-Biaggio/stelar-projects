@@ -55,12 +55,18 @@ baú o abre e sorteia um item pela raridade:
 | Sorte | Comum | Incomum | Raro | Épico |
 |---|---|---|---|---|
 | 1x (início) | 50% | 30% | 15% | 5% |
-| 2x | 10% | 30% | 42,5% | 17,5% |
-| 2,4x | 0% | 24% | 53,5% | 22,5% |
-| 3x ou mais | 0% | 0% | 70% | 30% |
+| 1,4x | 30% | 42% | 21% | 7% |
+| 1,8x | 10% | 54% | 27% | 9% |
+| 2x | 10% | 50% | 30% | 10% |
+| 3x | 10% | 30% | 45% | 15% |
+| 4x | 10% | 10% | 60% | 20% |
+| 8x | 10% | 10% | 40% | 40% |
+| 14x ou mais | 10% | 10% | 10% | 70% |
 
-A sorte tira chance primeiro do comum e, quando ele zera, do incomum; essa chance vai para
-raro e épico. O painel de status mostra as chances atuais. Na sala do tesouro, o botão
+A sorte multiplica as chances de épico, raro e incomum (sorte 2x = épico 10%), e o comum fica
+com o resto. Nenhuma raridade cai abaixo de 10%: quando o comum chega a 10%, o incomum passa
+a cair; quando o incomum chega a 10%, o raro passa a cair, até o épico chegar a 70%.
+O painel de status mostra as chances atuais. Na sala do tesouro, o botão
 **+ Novo baú** fecha o baú de novo para testar várias aberturas. As salas guardam o que ficou
 nelas (baú aberto, itens no chão) quando o gato sai e volta.
 

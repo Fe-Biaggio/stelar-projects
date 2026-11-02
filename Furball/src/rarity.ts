@@ -13,22 +13,36 @@ export const RARITY_INFO: Record<Rarity, { name: string; color: string; glow: nu
 
 /** Chances (em %) com sorte 1x. */
 const BASE = { common: 50, uncommon: 30, rare: 15, epic: 5 };
-/** Chances (em %) com a sorte máxima. */
-const BEST = { common: 0, uncommon: 0, rare: 70, epic: 30 };
-/** Sorte em que as chances chegam ao máximo (10 churus de +0,2x). */
-export const LUCK_FOR_BEST = 3;
+/** Nenhuma raridade cai abaixo disso. */
+export const MIN_ODDS = 10;
 
 /**
- * Chances de cada raridade para uma sorte. A sorte "tira" pontos primeiro do comum e,
- * quando ele chega a 0%, do incomum. Esses pontos vão para raro e épico, até 70% / 30%.
+ * Chances de cada raridade para uma sorte.
+ *
+ * A sorte multiplica as chances de épico, raro e incomum, e o comum fica com o resto.
+ * Cada raridade pior para em 10%, uma de cada vez:
+ *  1. o comum cai até 10% (sorte 1,8x);
+ *  2. depois o incomum passa a ser o resto e cai até 10% (sorte 4x);
+ *  3. depois o raro passa a ser o resto e cai até 10%, com o épico chegando a 70% (sorte 14x).
  */
 export function rarityOdds(luck: number): Record<Rarity, number> {
-  const t = Math.min(Math.max((luck - 1) / (LUCK_FOR_BEST - 1), 0), 1);
-  const drained = (BASE.common + BASE.uncommon) * t; // pontos tirados dos itens piores
-  const common = Math.max(BASE.common - drained, 0);
-  const uncommon = Math.max(BASE.uncommon - Math.max(drained - BASE.common, 0), 0);
-  const rare = BASE.rare + (BEST.rare - BASE.rare) * t;
-  const epic = BASE.epic + (BEST.epic - BASE.epic) * t;
+  const l = Math.max(luck, 1);
+  let epic = BASE.epic * l;
+  let rare = BASE.rare * l;
+  let uncommon = BASE.uncommon * l;
+  let common = 100 - epic - rare - uncommon;
+  if (common < MIN_ODDS) {
+    common = MIN_ODDS;
+    uncommon = 100 - common - epic - rare;
+  }
+  if (uncommon < MIN_ODDS) {
+    uncommon = MIN_ODDS;
+    rare = 100 - common - uncommon - epic;
+  }
+  if (rare < MIN_ODDS) {
+    rare = MIN_ODDS;
+    epic = 100 - common - uncommon - rare; // 70%
+  }
   const round = (v: number) => Math.round(v * 10) / 10;
   return { common: round(common), uncommon: round(uncommon), rare: round(rare), epic: round(epic) };
 }
