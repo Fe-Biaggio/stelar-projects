@@ -1,24 +1,27 @@
 import Phaser from 'phaser';
 import { FLOOR, GAME_HEIGHT, GAME_WIDTH, TILE, WALL } from '../config';
 import { CatId } from '../cats';
+import { ITEMS, ItemId, randomItemOf } from '../items';
+import { Chest } from '../objects/Chest';
 import { DummyCat } from '../objects/DummyCat';
-import { ItemId } from '../items';
 import { Furball, createFurballTexture } from '../objects/Furball';
-import { ItemPickup } from '../objects/ItemPickup';
+import { ItemPickup, ItemSpawn } from '../objects/ItemPickup';
 import { Facing, Player } from '../objects/Player';
+import { RARITY_INFO, RARITY_ORDER, rarityOdds, rollRarity } from '../rarity';
+import { RoomId, RoomState, Run, newRun } from '../run';
 import { STAT_LABELS, Stats, formatMult } from '../stats';
-import { drawRoom } from '../world/room';
+import { DoorSide, drawRoom } from '../world/room';
 
 type MoveKeys = Record<'w' | 'a' | 's' | 'd', Phaser.Input.Keyboard.Key>;
 type AimKeys = Record<Facing, Phaser.Input.Keyboard.Key>;
 
-// Espinhos no chão para testar a vida (coluna, linha em tiles do chão).
+// Espinhos no chão da sala inicial, para testar a vida (coluna, linha em tiles do chão).
 const SPIKES: [number, number][] = [
   [2, 1],
   [10, 5],
 ];
 
-// Itens de teste espalhados pela sala (id, coluna, linha em tiles do chão).
+// Itens de teste espalhados pela sala inicial (id, coluna, linha em tiles do chão).
 const TEST_ITEMS: [ItemId, number, number][] = [
   ['can', 4, 1],
   ['catnip', 6, 1],
@@ -29,17 +32,46 @@ const TEST_ITEMS: [ItemId, number, number][] = [
   ['milk', 8, 5],
 ];
 
+/** Portas abertas de cada sala e para onde levam. */
+const DOORS: Record<RoomId, Partial<Record<DoorSide, RoomId>>> = {
+  start: { right: 'treasure' },
+  treasure: { left: 'start' },
+};
+
+const OPPOSITE: Record<DoorSide, DoorSide> = { left: 'right', right: 'left', up: 'down', down: 'up' };
+
+// Onde o item cai ao sair do baú (em relação ao baú). Se o lugar estiver ocupado, usa o próximo.
+const DROP_SPOTS: [number, number][] = [
+  [0, 70],
+  [-80, 50],
+  [80, 50],
+  [-90, -10],
+  [90, -10],
+  [0, 130],
+];
+
+interface RoomData {
+  cat?: CatId;
+  run?: Run;
+  room?: RoomId;
+  /** Porta por onde o gato entrou. */
+  enterFrom?: DoorSide;
+}
+
 export class RoomScene extends Phaser.Scene {
-  private cat: CatId = 'black';
+  private run!: Run;
+  private roomId: RoomId = 'start';
+  private enterFrom?: DoorSide;
   private player!: Player;
-  private dummy!: DummyCat;
+  private dummy?: DummyCat;
+  private chest?: Chest;
   private moveKeys!: MoveKeys;
   private aimKeys!: AimKeys;
   private furballs: Furball[] = [];
   private spikeRects: Phaser.Geom.Rectangle[] = [];
   private hearts: Phaser.GameObjects.Image[] = [];
   private items: ItemPickup[] = [];
-  private statTexts = new Map<keyof Stats, Phaser.GameObjects.Text>();
+  private statTexts = new Map<string, Phaser.GameObjects.Text>();
   private banner?: Phaser.GameObjects.Container;
   private hint?: Phaser.GameObjects.Text;
   private leaving = false;
@@ -49,8 +81,19 @@ export class RoomScene extends Phaser.Scene {
     super('Room');
   }
 
-  init(data: { cat?: CatId }) {
-    if (data.cat) this.cat = data.cat;
+  private get cat() {
+    return this.run.cat;
+  }
+
+  private get roomState(): RoomState {
+    return (this.run.rooms[this.roomId] ??= { items: [] });
+  }
+
+  /** Sem `run`, começa uma partida nova (vinda da seleção ou do R). */
+  init(data: RoomData) {
+    this.run = data.run ?? newRun(data.cat ?? 'black');
+    this.roomId = data.room ?? 'start';
+    this.enterFrom = data.enterFrom;
   }
 
   create() {
@@ -60,21 +103,30 @@ export class RoomScene extends Phaser.Scene {
     this.items = [];
     this.hearts = [];
     this.banner = undefined;
+    this.dummy = undefined;
+    this.chest = undefined;
     createFurballTexture(this, this.cat);
-    drawRoom(this);
-    this.drawSpikes();
-
+    drawRoom(this, Object.keys(DOORS[this.roomId]) as DoorSide[]);
     this.physics.world.setBounds(FLOOR.x, FLOOR.y, FLOOR.width, FLOOR.height);
 
-    // Gato de teste parado no meio da sala.
-    this.dummy = new DummyCat(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 12, 'gray');
+    const firstVisit = !this.run.rooms[this.roomId];
+    if (this.roomId === 'start') {
+      this.drawSpikes();
+      // Gato de teste parado no meio da sala.
+      this.dummy = new DummyCat(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 12, 'gray');
+    } else {
+      this.chest = new Chest(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 20, !!this.roomState.chestOpen);
+    }
+    // Itens que ficaram no chão da última vez que o gato esteve aqui
+    for (const it of this.roomState.items) this.items.push(new ItemPickup(this, it.x, it.y, it.id));
+    if (firstVisit && this.roomId === 'start') this.respawnItems(false);
 
-    this.player = new Player(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + TILE * 2.5, this.cat);
-    this.physics.add.collider(this.player.body, this.dummy.body);
+    const spawn = this.spawnPoint();
+    this.player = new Player(this, spawn.x, spawn.y, this.cat, this.run.stats, this.run.hp, spawn.facing);
+    if (this.dummy) this.physics.add.collider(this.player.body, this.dummy.body);
+    if (this.chest) this.physics.add.collider(this.player.body, this.chest.body, () => this.openChest());
     this.player.on('hp', (hp: number, maxHp: number) => this.updateHearts(hp, maxHp, true));
     this.player.on('stats', (stats: Stats) => this.updateStats(stats));
-
-    this.respawnItems(false);
     this.player.on('dead', () => this.showGameOver());
 
     const kb = this.input.keyboard!;
@@ -86,24 +138,45 @@ export class RoomScene extends Phaser.Scene {
 
     this.createHud();
 
-    this.hint = this.add
-      .text(GAME_WIDTH / 2, GAME_HEIGHT - WALL - 28, 'WASD para andar  ·  setas para atirar', {
-        fontFamily: 'monospace',
-        fontSize: '18px',
-        color: '#e8d9c4',
-        stroke: '#1a1210',
-        strokeThickness: 4,
-      })
-      .setOrigin(0.5)
-      .setAlpha(0.85)
-      .setDepth(10_000);
+    if (!this.enterFrom) {
+      this.hint = this.add
+        .text(GAME_WIDTH / 2, GAME_HEIGHT - WALL - 28, 'WASD para andar  ·  setas para atirar', {
+          fontFamily: 'monospace',
+          fontSize: '18px',
+          color: '#e8d9c4',
+          stroke: '#1a1210',
+          strokeThickness: 4,
+        })
+        .setOrigin(0.5)
+        .setAlpha(0.85)
+        .setDepth(10_000);
+    }
 
     if (this.game.renderer.type === Phaser.WEBGL) {
       this.cameras.main.postFX.addVignette(0.5, 0.5, 0.95, 0.3);
     }
+    if (this.enterFrom) this.cameras.main.fadeIn(180);
+  }
+
+  /** Onde o gato aparece: na porta por onde entrou, ou embaixo do centro no começo. */
+  private spawnPoint(): { x: number; y: number; facing: Facing } {
+    const cy = GAME_HEIGHT / 2 + 10;
+    switch (this.enterFrom) {
+      case 'left':
+        return { x: FLOOR.x + 36, y: cy, facing: 'right' };
+      case 'right':
+        return { x: FLOOR.x + FLOOR.width - 36, y: cy, facing: 'left' };
+      case 'up':
+        return { x: GAME_WIDTH / 2, y: FLOOR.y + 40, facing: 'down' };
+      case 'down':
+        return { x: GAME_WIDTH / 2, y: FLOOR.y + FLOOR.height - 20, facing: 'up' };
+      default:
+        return { x: GAME_WIDTH / 2, y: GAME_HEIGHT / 2 + TILE * 2.5, facing: 'down' };
+    }
   }
 
   update(time: number, deltaMs: number) {
+    if (this.leaving) return;
     // Limita o passo para a física não dar saltos se a aba ficar em segundo plano.
     const dt = Math.min(deltaMs, 50) / 1000;
 
@@ -127,27 +200,93 @@ export class RoomScene extends Phaser.Scene {
     for (const f of this.furballs) {
       f.update(dt);
       const { x, y } = f.position;
-      if (!f.dead && this.dummy.hits(x, y, f.hitRadius)) {
+      if (this.dummy && !f.dead && this.dummy.hits(x, y, f.hitRadius)) {
         const d = f.direction;
         f.burst();
         this.dummy.takeHit(d.x, d.y, f.damage);
         if (this.showDamage) this.showDamageNumber(this.dummy.x, this.dummy.y - 70, f.damage);
       }
     }
-    this.dummy.update(time);
+    this.dummy?.update(time);
     this.furballs = this.furballs.filter((f) => !f.dead);
 
     this.checkSpikes();
     this.checkItems(time);
+    this.checkDoors();
   }
 
-  /** Coloca no chão os itens de teste que não estão lá (os que já foram pegos). */
+  /** Se o gato está empurrando uma porta aberta, vai para a sala do outro lado. */
+  private checkDoors() {
+    if (this.player.dead) return;
+    const b = this.player.body;
+    const feet = this.player.feet;
+    const midY = Math.abs(feet.y - 10 - GAME_HEIGHT / 2) < 30;
+    const midX = Math.abs(feet.x - GAME_WIDTH / 2) < 30;
+    const pushing: Record<DoorSide, boolean> = {
+      right: midY && this.move.x > 0 && b.right >= FLOOR.x + FLOOR.width - 1,
+      left: midY && this.move.x < 0 && b.left <= FLOOR.x + 1,
+      up: midX && this.move.y < 0 && b.top <= FLOOR.y + 1,
+      down: midX && this.move.y > 0 && b.bottom >= FLOOR.y + FLOOR.height - 1,
+    };
+    for (const [side, target] of Object.entries(DOORS[this.roomId]) as [DoorSide, RoomId][]) {
+      if (pushing[side]) {
+        this.goToRoom(target, OPPOSITE[side]);
+        return;
+      }
+    }
+  }
+
+  private goToRoom(room: RoomId, enterFrom: DoorSide) {
+    this.leaving = true;
+    this.saveRoom();
+    this.cameras.main.fadeOut(150);
+    this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
+      const data: RoomData = { run: this.run, room, enterFrom };
+      this.scene.restart(data);
+    });
+  }
+
+  /** Guarda na partida o que precisa continuar igual quando o gato voltar. */
+  private saveRoom() {
+    this.run.hp = this.player.hp;
+    this.roomState.items = this.items.filter((i) => !i.collected).map((i) => ({ id: i.info.id, x: i.x, y: i.y }));
+    if (this.chest) this.roomState.chestOpen = this.chest.opened;
+  }
+
+  /** Abre o baú e sorteia um item pela sorte do gato. */
+  private openChest() {
+    if (!this.chest || !this.chest.open()) return;
+    const rarity = rollRarity(this.run.stats.luck);
+    const id = randomItemOf(rarity);
+    const spot = this.freeDropSpot(this.chest.x, this.chest.y);
+    this.items.push(
+      new ItemPickup(this, spot.x, spot.y, id, { kind: 'toss', fromX: this.chest.x, fromY: this.chest.y - 30 }),
+    );
+    const info = RARITY_INFO[rarity];
+    this.showBanner(`Item ${info.name.toLowerCase()}!`, ITEMS[id].name, info.color);
+  }
+
+  private freeDropSpot(cx: number, cy: number) {
+    for (const [dx, dy] of DROP_SPOTS) {
+      const x = cx + dx;
+      const y = cy + dy;
+      if (!this.items.some((i) => !i.collected && Phaser.Math.Distance.Between(i.x, i.y, x, y) < 40)) return { x, y };
+    }
+    return { x: cx + Phaser.Math.Between(-120, 120), y: cy + Phaser.Math.Between(60, 140) };
+  }
+
+  /** Botão de teste: na sala inicial repõe os itens; na do tesouro, fecha o baú de novo. */
   private respawnItems(animate = true) {
+    if (this.chest) {
+      if (this.chest.opened) this.chest.close();
+      return;
+    }
+    const spawn: ItemSpawn = animate ? { kind: 'pop' } : { kind: 'none' };
     for (const [id, col, row] of TEST_ITEMS) {
-      if (this.items.some((i) => i.info.id === id)) continue;
+      if (this.items.some((i) => !i.collected && i.info.id === id)) continue;
       const x = FLOOR.x + (col + 0.5) * TILE;
       const y = FLOOR.y + (row + 0.5) * TILE + 14;
-      this.items.push(new ItemPickup(this, x, y, id, animate));
+      this.items.push(new ItemPickup(this, x, y, id, spawn));
     }
   }
 
@@ -158,7 +297,8 @@ export class RoomScene extends Phaser.Scene {
       if (!this.player.dead && item.touches(feet.x, feet.y)) {
         item.collect(feet.x, feet.y);
         this.player.collect(item.info);
-        this.showBanner(item.info.name, item.info.effect);
+        const rarity = RARITY_INFO[item.info.rarity];
+        this.showBanner(item.info.name, `${item.info.effect}  ·  ${rarity.name}`, rarity.color);
       }
     }
     this.items = this.items.filter((i) => !i.collected);
@@ -204,8 +344,10 @@ export class RoomScene extends Phaser.Scene {
     const top = 58;
     const lineH = 15;
     const w = 132;
+    // Status + título "Chances do baú" + uma linha por raridade
+    const lines = STAT_LABELS.length + 1 + RARITY_ORDER.length;
     this.add
-      .rectangle(right, top - 4, w, STAT_LABELS.length * lineH + 8, 0x120e0c, 0.6)
+      .rectangle(right, top - 4, w, lines * lineH + 12, 0x120e0c, 0.6)
       .setOrigin(1, 0)
       .setDepth(40_000);
     this.statTexts.clear();
@@ -218,6 +360,26 @@ export class RoomScene extends Phaser.Scene {
         key,
         this.add
           .text(right - 8, y, '', { fontFamily: 'monospace', fontSize: '12px', color: '#e8d9c4' })
+          .setOrigin(1, 0)
+          .setDepth(40_001),
+      );
+    });
+
+    // Chances de cada raridade no baú (mudam com a sorte)
+    const oddsTop = top + STAT_LABELS.length * lineH + 6;
+    this.add
+      .text(right - w + 8, oddsTop, 'Chances do baú', { fontFamily: 'monospace', fontSize: '11px', color: '#8a7a6a' })
+      .setDepth(40_001);
+    RARITY_ORDER.forEach((r, i) => {
+      const y = oddsTop + (i + 1) * lineH;
+      const color = RARITY_INFO[r].color;
+      this.add
+        .text(right - w + 8, y, RARITY_INFO[r].name, { fontFamily: 'monospace', fontSize: '12px', color })
+        .setDepth(40_001);
+      this.statTexts.set(
+        `odds_${r}`,
+        this.add
+          .text(right - 8, y, '', { fontFamily: 'monospace', fontSize: '12px', color })
           .setOrigin(1, 0)
           .setDepth(40_001),
       );
@@ -236,6 +398,10 @@ export class RoomScene extends Phaser.Scene {
         this.time.delayedCall(1200, () => text.active && text.setColor('#e8d9c4'));
       }
       text.setText(value);
+    }
+    const odds = rarityOdds(stats.luck);
+    for (const r of RARITY_ORDER) {
+      this.statTexts.get(`odds_${r}`)!.setText(`${String(odds[r]).replace('.', ',')}%`);
     }
   }
 
@@ -267,10 +433,10 @@ export class RoomScene extends Phaser.Scene {
   }
 
   /** Faixa no topo com o nome do item e o efeito, como no Isaac. */
-  private showBanner(title: string, subtitle: string) {
+  private showBanner(title: string, subtitle: string, color = '#f2c879') {
     this.banner?.destroy();
     const style = { fontFamily: 'monospace', color: '#e8d9c4', stroke: '#1a1210' };
-    const t1 = this.add.text(0, 0, title, { ...style, fontSize: '26px', strokeThickness: 6, color: '#f2c879' }).setOrigin(0.5);
+    const t1 = this.add.text(0, 0, title, { ...style, fontSize: '26px', strokeThickness: 6, color }).setOrigin(0.5);
     const t2 = this.add.text(0, 30, subtitle, { ...style, fontSize: '16px', strokeThickness: 4 }).setOrigin(0.5);
     const banner = this.add.container(GAME_WIDTH / 2, 110, [t1, t2]).setDepth(35_000).setAlpha(0);
     this.banner = banner;
@@ -289,7 +455,8 @@ export class RoomScene extends Phaser.Scene {
   private createTopButtons() {
     const y = 31;
     this.makeButton(GAME_WIDTH - 20 - 66, y, 132, '↺ Início (Esc)', () => this.backToSelect());
-    this.makeButton(GAME_WIDTH - 162 - 56, y, 112, '+ Repor itens', () => this.respawnItems());
+    const refill = this.roomId === 'treasure' ? '+ Novo baú' : '+ Repor itens';
+    this.makeButton(GAME_WIDTH - 162 - 56, y, 112, refill, () => this.respawnItems());
     const damageButton = this.makeButton(GAME_WIDTH - 284 - 58, y, 116, '', () => {
       this.registry.set('showDamage', !this.showDamage);
       damageButton.setText(this.damageLabel());

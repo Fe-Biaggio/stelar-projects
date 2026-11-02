@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { CAT_FRAME_W, CATS, CatId } from '../cats';
 import { ItemInfo, applyItem } from '../items';
-import { Stats, newStats } from '../stats';
+import { Stats } from '../stats';
 
 export type Facing = 'down' | 'up' | 'left' | 'right';
 
@@ -52,8 +52,7 @@ export interface ShotRequest {
  */
 export class Player extends Phaser.Events.EventEmitter {
   readonly body: Phaser.Physics.Arcade.Body;
-  readonly stats: Stats = newStats();
-  hp = this.stats.maxHp;
+  hp: number;
   private readonly sprite: Phaser.GameObjects.Sprite;
   private readonly shadow: Phaser.GameObjects.Ellipse;
   private facing: Facing = 'down';
@@ -64,8 +63,19 @@ export class Player extends Phaser.Events.EventEmitter {
   /** Boca em relação aos pés, já na escala do sprite: [x, altura]. */
   private readonly mouth: Record<Facing, [number, number]>;
 
-  constructor(private readonly scene: Phaser.Scene, x: number, y: number, readonly cat: CatId) {
+  /** `stats` é compartilhado com a partida, para os itens valerem em todas as salas. */
+  constructor(
+    private readonly scene: Phaser.Scene,
+    x: number,
+    y: number,
+    readonly cat: CatId,
+    readonly stats: Stats,
+    hp: number,
+    facing: Facing = 'down',
+  ) {
     super();
+    this.hp = hp;
+    this.facing = facing;
     const feetY = 96 * ORIGIN_Y;
     const toFeet = ([mx, my]: [number, number]): [number, number] => [
       (mx - CAT_FRAME_W / 2) * SPRITE_SCALE,
@@ -84,7 +94,7 @@ export class Player extends Phaser.Events.EventEmitter {
 
     this.shadow = scene.add.ellipse(x, y, 54, 16, 0x000000, 0.35);
     this.sprite = scene.add
-      .sprite(x, y, `cat_${cat}`, FRAME.down)
+      .sprite(x, y, `cat_${cat}`, FRAME[facing])
       .setOrigin(0.5, ORIGIN_Y)
       .setScale(SPRITE_SCALE);
   }

@@ -31,21 +31,38 @@ cinza de teste: ele morre com 4 bolas de pelo e reaparece depois de alguns segun
 Cada item soma **+0,2x** no status (todos começam em 1x). O painel pequeno no canto
 superior direito mostra os valores atuais.
 
-| Item | Efeito |
-|---|---|
-| Comida enlatada | +1 coração (e cura esse coração) |
-| Catnip | Velocidade de movimento |
-| Escovinha | Cadência (tiros por segundo) |
-| Churu | Sorte (para baús, no futuro) |
-| Bolinha de lã | Velocidade do tiro |
-| Peixe fresco | Dano |
-| Leitinho | Tamanho da bola de pelo |
+| Item | Efeito | Raridade |
+|---|---|---|
+| Comida enlatada | +1 coração (e cura esse coração) | Raro |
+| Catnip | Velocidade de movimento | Comum |
+| Escovinha | Cadência (tiros por segundo) | Incomum |
+| Churu | Sorte | Comum |
+| Bolinha de lã | Velocidade do tiro | Comum |
+| Peixe fresco | Dano | Épico |
+| Leitinho | Tamanho da bola de pelo | Incomum |
 
 Na sala de teste há um de cada no chão; R ou Esc recomeçam com os status zerados.
 
 Botões de teste no topo da sala:
 - **Dano: ligado/desligado** – mostra o dano de cada bola de pelo sobre o inimigo.
 - **+ Repor itens** – devolve ao chão os itens já pegos, para testar o acúmulo.
+
+### Sala do tesouro e sorte
+
+A porta da direita da sala inicial leva à sala do tesouro, com um baú no meio. Encostar no
+baú o abre e sorteia um item pela raridade:
+
+| Sorte | Comum | Incomum | Raro | Épico |
+|---|---|---|---|---|
+| 1x (início) | 50% | 30% | 15% | 5% |
+| 2x | 10% | 30% | 42,5% | 17,5% |
+| 2,4x | 0% | 24% | 53,5% | 22,5% |
+| 3x ou mais | 0% | 0% | 70% | 30% |
+
+A sorte tira chance primeiro do comum e, quando ele zera, do incomum; essa chance vai para
+raro e épico. O painel de status mostra as chances atuais. Na sala do tesouro, o botão
+**+ Novo baú** fecha o baú de novo para testar várias aberturas. As salas guardam o que ficou
+nelas (baú aberto, itens no chão) quando o gato sai e volta.
 
 ## Estrutura
 
@@ -57,7 +74,9 @@ Furball/
 │   ├── config.ts        # medidas da sala e da tela
 │   ├── main.ts          # inicia o Phaser
 │   ├── cats.ts          # lista de gatos jogáveis e posição da boca de cada um
-│   ├── items.ts         # itens coletáveis e seus efeitos
+│   ├── items.ts         # itens coletáveis, efeitos e raridade
+│   ├── rarity.ts        # raridades e chances do baú conforme a sorte
+│   ├── run.ts           # estado da partida (status, vida, o que ficou em cada sala)
 │   ├── stats.ts         # status do gato (multiplicadores)
 │   ├── objects/         # jogador, inimigos, projéteis...
 │   ├── scenes/          # carregamento, seleção de personagem, sala

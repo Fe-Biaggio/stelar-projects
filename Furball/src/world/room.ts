@@ -2,7 +2,10 @@ import Phaser from 'phaser';
 import { FLOOR, GAME_HEIGHT, GAME_WIDTH, WALL } from '../config';
 
 /** Desenha uma sala de porão: paredes de pedra, chão de tábuas e quatro portas. */
-export function drawRoom(scene: Phaser.Scene) {
+export type DoorSide = 'up' | 'down' | 'left' | 'right';
+
+/** Desenha a sala. As portas em `openDoors` aparecem abertas (passagem escura); as outras, fechadas. */
+export function drawRoom(scene: Phaser.Scene, openDoors: DoorSide[] = []) {
   const rng = new Phaser.Math.RandomDataGenerator(['furball']);
   const g = scene.add.graphics().setDepth(-100);
   const shade = (base: number, spread: number) => {
@@ -77,16 +80,17 @@ export function drawRoom(scene: Phaser.Scene) {
   }
   g.lineStyle(3, 0x120e0c).strokeRect(FLOOR.x, FLOOR.y, FLOOR.width, FLOOR.height);
 
-  // Portas (fechadas por enquanto) no meio de cada parede.
+  // Portas no meio de cada parede.
   const cx = GAME_WIDTH / 2;
   const cy = GAME_HEIGHT / 2;
-  drawDoor(g, cx, WALL / 2, 0);
-  drawDoor(g, cx, GAME_HEIGHT - WALL / 2, Math.PI);
-  drawDoor(g, WALL / 2, cy, -Math.PI / 2);
-  drawDoor(g, GAME_WIDTH - WALL / 2, cy, Math.PI / 2);
+  const open = (side: DoorSide) => openDoors.includes(side);
+  drawDoor(g, cx, WALL / 2, 0, open('up'));
+  drawDoor(g, cx, GAME_HEIGHT - WALL / 2, Math.PI, open('down'));
+  drawDoor(g, WALL / 2, cy, -Math.PI / 2, open('left'));
+  drawDoor(g, GAME_WIDTH - WALL / 2, cy, Math.PI / 2, open('right'));
 }
 
-function drawDoor(g: Phaser.GameObjects.Graphics, x: number, y: number, rotation: number) {
+function drawDoor(g: Phaser.GameObjects.Graphics, x: number, y: number, rotation: number, open: boolean) {
   // Desenha uma porta voltada para cima e gira em torno do centro.
   const pts = (list: number[][]) =>
     list.map(([px, py]) => {
@@ -96,6 +100,22 @@ function drawDoor(g: Phaser.GameObjects.Graphics, x: number, y: number, rotation
 
   g.fillStyle(0x5c514b).fillPoints(pts([[-56, 32], [-56, -18], [-40, -32], [40, -32], [56, -18], [56, 32]]), true);
   g.fillStyle(0x2c2522).fillPoints(pts([[-42, 32], [-42, -14], [-30, -22], [30, -22], [42, -14], [42, 32]]), true);
-  g.fillStyle(0x0a0807).fillPoints(pts([[-34, 32], [-34, -10], [-24, -16], [24, -16], [34, -10], [34, 32]]), true);
+  const opening = [[-34, 32], [-34, -10], [-24, -16], [24, -16], [34, -10], [34, 32]];
+  if (open) {
+    // Passagem escura com o chão de madeira entrando um pouco
+    g.fillStyle(0x0a0807).fillPoints(pts(opening), true);
+    g.fillStyle(0x5a3d2a).fillPoints(pts([[-34, 32], [-34, 22], [34, 22], [34, 32]]), true);
+    g.fillStyle(0x000000, 0.4).fillPoints(pts([[-34, 22], [-34, 16], [34, 16], [34, 22]]), true);
+  } else {
+    // Porta de madeira fechada, com tábuas e uma faixa de ferro
+    g.fillStyle(0x5a3a24).fillPoints(pts(opening), true);
+    g.lineStyle(2, 0x2e1c12);
+    for (const px of [-17, 0, 17]) {
+      const [a, b] = pts([[px, -14], [px, 32]]);
+      g.lineBetween(a.x, a.y, b.x, b.y);
+    }
+    g.fillStyle(0x3a3634).fillPoints(pts([[-34, 6], [-34, 0], [34, 0], [34, 6]]), true);
+    g.lineStyle(2, 0x1a1410).strokePoints(pts(opening), true);
+  }
   g.lineStyle(3, 0x171210).strokePoints(pts([[-56, 32], [-56, -18], [-40, -32], [40, -32], [56, -18], [56, 32]]), false);
 }
