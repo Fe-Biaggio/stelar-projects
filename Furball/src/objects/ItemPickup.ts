@@ -3,6 +3,7 @@ import { ITEMS, ItemId, ItemInfo } from '../items';
 
 const ITEM_SCALE = 0.72;
 const PICKUP_RADIUS = 30; // distância dos pés do gato até o item
+const SPAWN_GRACE = 500; // ms em que um item recém-reposto ainda não pode ser pego
 
 /** Item parado no chão, flutuando, esperando o gato passar por cima. */
 export class ItemPickup {
@@ -11,20 +12,31 @@ export class ItemPickup {
   private readonly sprite: Phaser.GameObjects.Image;
   private readonly shadow: Phaser.GameObjects.Ellipse;
   private readonly phase = Math.random() * Math.PI * 2;
+  private readonly readyAt: number;
 
   constructor(
     private readonly scene: Phaser.Scene,
     readonly x: number,
     readonly y: number,
     id: ItemId,
+    animate = false,
   ) {
     this.info = ITEMS[id];
+    this.readyAt = animate ? scene.time.now + SPAWN_GRACE : 0;
     this.shadow = scene.add.ellipse(x, y, 34, 10, 0x000000, 0.3).setDepth(y - 1);
     this.sprite = scene.add
       .image(x, y, 'items', this.info.frame)
       .setOrigin(0.5, 1)
       .setScale(ITEM_SCALE)
       .setDepth(y);
+
+    if (animate) {
+      // Surge com um "pop"
+      this.sprite.setScale(0);
+      this.shadow.setScale(0);
+      scene.tweens.add({ targets: this.sprite, scale: ITEM_SCALE, duration: 300, ease: 'Back.Out' });
+      scene.tweens.add({ targets: this.shadow, scale: 1, duration: 300 });
+    }
   }
 
   update(time: number) {
@@ -35,7 +47,8 @@ export class ItemPickup {
   }
 
   touches(px: number, py: number) {
-    return !this.collected && Phaser.Math.Distance.Between(px, py, this.x, this.y) < PICKUP_RADIUS;
+    if (this.collected || this.scene.time.now < this.readyAt) return false;
+    return Phaser.Math.Distance.Between(px, py, this.x, this.y) < PICKUP_RADIUS;
   }
 
   /** Sobe por cima da cabeça do gato e some (como no Isaac). */

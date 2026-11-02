@@ -43,6 +43,10 @@ superior direito mostra os valores atuais.
 
 Na sala de teste há um de cada no chão; R ou Esc recomeçam com os status zerados.
 
+Botões de teste no topo da sala:
+- **Dano: ligado/desligado** – mostra o dano de cada bola de pelo sobre o inimigo.
+- **+ Repor itens** – devolve ao chão os itens já pegos, para testar o acúmulo.
+
 ## Estrutura
 
 ```

@@ -74,11 +74,7 @@ export class RoomScene extends Phaser.Scene {
     this.player.on('hp', (hp: number, maxHp: number) => this.updateHearts(hp, maxHp, true));
     this.player.on('stats', (stats: Stats) => this.updateStats(stats));
 
-    for (const [id, col, row] of TEST_ITEMS) {
-      const x = FLOOR.x + (col + 0.5) * TILE;
-      const y = FLOOR.y + (row + 0.5) * TILE + 14;
-      this.items.push(new ItemPickup(this, x, y, id));
-    }
+    this.respawnItems(false);
     this.player.on('dead', () => this.showGameOver());
 
     const kb = this.input.keyboard!;
@@ -135,6 +131,7 @@ export class RoomScene extends Phaser.Scene {
         const d = f.direction;
         f.burst();
         this.dummy.takeHit(d.x, d.y, f.damage);
+        if (this.showDamage) this.showDamageNumber(this.dummy.x, this.dummy.y - 70, f.damage);
       }
     }
     this.dummy.update(time);
@@ -142,6 +139,16 @@ export class RoomScene extends Phaser.Scene {
 
     this.checkSpikes();
     this.checkItems(time);
+  }
+
+  /** Coloca no chão os itens de teste que não estão lá (os que já foram pegos). */
+  private respawnItems(animate = true) {
+    for (const [id, col, row] of TEST_ITEMS) {
+      if (this.items.some((i) => i.info.id === id)) continue;
+      const x = FLOOR.x + (col + 0.5) * TILE;
+      const y = FLOOR.y + (row + 0.5) * TILE + 14;
+      this.items.push(new ItemPickup(this, x, y, id, animate));
+    }
   }
 
   private checkItems(time: number) {
@@ -187,7 +194,7 @@ export class RoomScene extends Phaser.Scene {
 
   private createHud() {
     this.updateHearts(this.player.hp, this.player.stats.maxHp, false);
-    this.createMenuButton();
+    this.createTopButtons();
     this.createStatsPanel();
   }
 
@@ -232,6 +239,33 @@ export class RoomScene extends Phaser.Scene {
     }
   }
 
+  /** Número de dano que sobe e some acima do inimigo. */
+  private showDamageNumber(x: number, y: number, amount: number) {
+    const value = (Math.round(amount * 10) / 10).toString().replace('.', ',');
+    const text = this.add
+      .text(x + Phaser.Math.Between(-16, 16), y, value, {
+        fontFamily: 'monospace',
+        fontSize: '20px',
+        fontStyle: 'bold',
+        color: '#ffffff',
+        stroke: '#a0201c',
+        strokeThickness: 5,
+      })
+      .setOrigin(0.5)
+      .setDepth(30_000)
+      .setScale(0.5);
+    this.tweens.add({ targets: text, scale: 1.15, duration: 120, ease: 'Back.Out' });
+    this.tweens.add({
+      targets: text,
+      y: y - 36,
+      alpha: 0,
+      delay: 250,
+      duration: 550,
+      ease: 'Quad.In',
+      onComplete: () => text.destroy(),
+    });
+  }
+
   /** Faixa no topo com o nome do item e o efeito, como no Isaac. */
   private showBanner(title: string, subtitle: string) {
     this.banner?.destroy();
@@ -251,12 +285,29 @@ export class RoomScene extends Phaser.Scene {
     });
   }
 
-  /** Botão no canto superior direito que volta para a seleção de personagem. */
-  private createMenuButton() {
-    const w = 132;
+  /** Botões no topo, à direita: alternar números de dano, repor itens e voltar ao início. */
+  private createTopButtons() {
+    const y = 31;
+    this.makeButton(GAME_WIDTH - 20 - 66, y, 132, '↺ Início (Esc)', () => this.backToSelect());
+    this.makeButton(GAME_WIDTH - 162 - 56, y, 112, '+ Repor itens', () => this.respawnItems());
+    const damageButton = this.makeButton(GAME_WIDTH - 284 - 58, y, 116, '', () => {
+      this.registry.set('showDamage', !this.showDamage);
+      damageButton.setText(this.damageLabel());
+    });
+    damageButton.setText(this.damageLabel());
+  }
+
+  private get showDamage(): boolean {
+    return this.registry.get('showDamage') ?? true;
+  }
+
+  private damageLabel() {
+    return this.showDamage ? 'Dano: ligado' : 'Dano: desligado';
+  }
+
+  /** Cria um botão arredondado centrado em (x, y). Retorna o texto para poder trocar o rótulo. */
+  private makeButton(x: number, y: number, w: number, text: string, onClick: () => void) {
     const h = 34;
-    const x = GAME_WIDTH - 20 - w / 2;
-    const y = 14 + h / 2;
     const bg = this.add.graphics();
     const draw = (hover: boolean) => {
       bg.clear();
@@ -265,13 +316,17 @@ export class RoomScene extends Phaser.Scene {
     };
     draw(false);
     const label = this.add
-      .text(0, 0, '↺ Início (Esc)', { fontFamily: 'monospace', fontSize: '15px', color: '#e8d9c4' })
+      .text(0, 0, text, { fontFamily: 'monospace', fontSize: '14px', color: '#e8d9c4' })
       .setOrigin(0.5);
     const button = this.add.container(x, y, [bg, label]).setDepth(40_000).setSize(w, h);
     button.setInteractive({ useHandCursor: true });
     button.on('pointerover', () => draw(true));
     button.on('pointerout', () => draw(false));
-    button.on('pointerdown', () => this.backToSelect());
+    button.on('pointerdown', () => {
+      onClick();
+      this.tweens.add({ targets: button, scale: 0.92, duration: 60, yoyo: true });
+    });
+    return label;
   }
 
   /** Volta para a tela de seleção, mantendo o gato atual pré-selecionado. */
