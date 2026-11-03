@@ -6,9 +6,10 @@ import { DoorSide } from './room';
 //  - buraco: bloqueia o gato e quem anda no chão (quem voa passa por cima);
 //  - cadeira: o gato sobe; inimigos de chão desviam;
 //  - mesa (2 tiles): só dá para subir a partir de uma cadeira; em cima dela, só inimigos que
-//    voam alcançam o gato.
+//    voam alcançam o gato;
+//  - fogueira: bloqueia e queima quem encosta; a bomba (ou uma bola molhada/congelada) apaga.
 
-export type PropKind = 'rock' | 'hole' | 'chair' | 'table';
+export type PropKind = 'rock' | 'hole' | 'chair' | 'table' | 'fire';
 
 export interface Prop {
   kind: PropKind;
@@ -131,8 +132,9 @@ export function generateProps(doors: DoorSide[], rng: () => number = Math.random
     let furniture = false;
     for (let g = 0; g < groups; g++) {
       const roll = rng();
-      if (roll < 0.4) cluster('rock', 2 + rand(4));
-      else if (roll < 0.7) cluster('hole', 1 + rand(3));
+      if (roll < 0.33) cluster('rock', 2 + rand(4));
+      else if (roll < 0.55) cluster('hole', 1 + rand(3));
+      else if (roll < 0.72) cluster('fire', 1 + rand(2));
       else if (!furniture) {
         // Mesa de 2 tiles com 1 ou 2 cadeiras encostadas
         const c = rand(ROOM_COLS - 1);
@@ -166,5 +168,6 @@ export function devPropsLayout(): Prop[] {
     { kind: 'hole', col: 2, row: 5, w: 1 },
     { kind: 'hole', col: 3, row: 5, w: 1 },
     { kind: 'hole', col: 9, row: 5, w: 1 },
+    { kind: 'fire', col: 6, row: 1, w: 1 },
   ];
 }

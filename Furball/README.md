@@ -200,6 +200,25 @@ usáveis (coleira, patinha, gato de teste e espinhos). Ao lado da sala dos itens
 o **gatinho pedinte** (esquerda, com 6 moedas) e o **gatinho vampiro** (direita, com 6 corações). O botão **+ Repor** de cada sala põe
 tudo de volta.
 
+### Itens elementais e fogueiras
+
+Quatro itens mudam a bola de pelo (e se combinam):
+
+| Item | Bola | No inimigo |
+|---|---|---|
+| Pimenta | pegando fogo | pega fogo: perde vida por 3 s |
+| Cubo de gelo | congelada | para por 1 s (o boss, um instantinho) |
+| Catavento de mão | de vento | é empurrado 3x mais longe |
+| Pedra | cheia de areia | fica lento por 3 s |
+| Pimenta + gelo | molhada (água) | fica lento por 3 s |
+
+Fogueiras aparecem nas salas como pedras e buracos (mesmo tamanho): bloqueiam a passagem e
+encostar tira meio coração. A bomba apaga a fogueira, e uma bola congelada ou molhada também.
+Sprites desenhados por `tools/draw_elements.py`.
+
+No modo desenvolvedor, à direita da sala do baú há duas salas com todos os itens do jogo
+(passivos; usáveis e elementais), com o nome embaixo de cada um e o botão "+ Repor itens".
+
 ### Controle (gamepad)
 
 Funciona com controles no navegador (Xbox, Android, Retroid Pocket etc.): analógico esquerdo
@@ -288,7 +307,7 @@ um print do jogo em `screenshots/` (fora do git), para enviar capturas durante o
 Para regerar os sprites a partir das folhas: `python tools/extract_cats.py`,
 `python tools/extract_ui.py`, `python tools/extract_items.py`, `python tools/extract_pickups.py`
 `python tools/extract_enemies.py`, `python tools/draw_bosses.py`, `python tools/draw_props.py`
-e `python tools/draw_actives.py`.
+`python tools/draw_actives.py` e `python tools/draw_elements.py`.
 
 ## Núcleo do jogo (MVP)
 

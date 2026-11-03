@@ -4,15 +4,16 @@ Lista do que foi pedido e ainda não está pronto (ou falta testar). Atualizada 
 
 ## Pendente
 
-- [ ] Modo dev: salas à direita da sala do baú com todos os itens disponíveis para teste.
-- [ ] Fogueiras no mapa (como pedras e buracos, mesmo tamanho): encostar tira vida.
-- [ ] 4 itens novos que mudam a bola de pelo: pimenta (fogo: inimigo pega fogo), cubo de gelo
-      (congela: inimigo para um instante), catavento de mão (vento: mais empurrão), pedra
-      (areia: deixa o inimigo lento). Fogo + gelo = água (molhado: lentidão). Os outros se
-      combinam.
 - [ ] Multiplayer pelo 4G: servidor de retransmissão (TURN, ex. Cloudflare) se alguma rede não
       conectar.
 - [ ] Testar o multiplayer em aparelhos de verdade (celular + PC + Retroid).
+
+## Feito em 03/11/2026 (elementos)
+
+- [x] Modo dev: 2 salas à direita da sala do baú com todos os itens para teste.
+- [x] Fogueiras nas salas (queimam ao encostar; bomba ou bola molhada/congelada apaga).
+- [x] Itens pimenta (fogo), cubo de gelo (congela), catavento (vento) e pedra (areia);
+      fogo + gelo = água (lentidão); os outros se combinam.
 
 ## Feito em 03/11/2026 (multiplayer)
 

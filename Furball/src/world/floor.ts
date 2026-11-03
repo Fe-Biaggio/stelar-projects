@@ -2,7 +2,7 @@ import { DoorSide } from './room';
 
 // Mapa de um nível: salas numa grade, ligadas pelas portas dos lados (como no Isaac).
 
-export type RoomType = 'devStart' | 'devProps' | 'devActives' | 'devNpc' | 'start' | 'normal' | 'treasure' | 'shop' | 'boss';
+export type RoomType = 'devStart' | 'devProps' | 'devActives' | 'devNpc' | 'devItems' | 'start' | 'normal' | 'treasure' | 'shop' | 'boss';
 
 /** Gatinho que pede algo, numa sala sem inimigos. */
 export type NpcKind = 'beggar' | 'vampire';
@@ -25,6 +25,8 @@ export interface RoomDef {
   npc?: NpcKind;
   /** Sala comum com um item de graça no meio. */
   item?: boolean;
+  /** Modo dev: qual página de itens de teste a sala mostra. */
+  itemPage?: number;
   /** VS: qual boss mora aqui (nível 1 a 5). */
   bossLevel?: number;
 }
@@ -77,6 +79,11 @@ export function devFloor(): FloorMap {
   add(1, 1, 'devNpc');
   rooms[roomKey(1, 1)].npc = 'vampire';
   rooms[roomKey(-1, 0)].chest = 'wood';
+  // À direita da sala do baú: salas com todos os itens do jogo para testar
+  add(2, 0, 'devItems');
+  rooms[roomKey(2, 0)].itemPage = 0;
+  add(3, 0, 'devItems');
+  rooms[roomKey(3, 0)].itemPage = 1;
   return { rooms, startId: roomKey(0, 0) };
 }
 

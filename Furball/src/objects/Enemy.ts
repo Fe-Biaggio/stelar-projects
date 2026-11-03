@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { ELEMENT_COLOR, ShotElement } from '../stats';
 import { FLOOR } from '../config';
 
 export type EnemyKind = 'fly' | 'spider' | 'blob' | 'pale' | 'boss';
@@ -82,6 +83,15 @@ export class Enemy {
   private dashesLeft = 0;
   private timer3 = 0;
   private hurtFlash = 0;
+  /** Efeitos dos elementos: queimando, congelado e lento (segundos restantes). */
+  private burnTime = 0;
+  private burnTick = 0;
+  private freezeTime = 0;
+  private slowTime = 0;
+  private slowFactor = 1;
+  private slowColor = 0;
+  private intended?: Phaser.Math.Vector2;
+  private fxTimer = 0;
 
   constructor(
     private readonly scene: Phaser.Scene,
@@ -149,15 +159,59 @@ export class Enemy {
     return Phaser.Math.Distance.Between(px, py, this.x, this.body.center.y) < this.spec.radius + r + 6;
   }
 
-  takeHit(dirX: number, dirY: number, damage: number) {
+  takeHit(dirX: number, dirY: number, damage: number, elements: ShotElement[] = []) {
     if (this.dead || this.spawning) return;
     this.hp -= damage;
     this.hurtFlash = 0.12;
-    // Empurrãozinho na direção do tiro (o boss quase não se mexe)
-    const push = this.kind === 'boss' ? 30 : 160;
+    // Empurrãozinho na direção do tiro (o boss quase não se mexe); o vento empurra muito mais
+    const push = (this.kind === 'boss' ? 30 : 160) * (elements.includes('wind') ? 3 : 1);
     this.body.velocity.x += dirX * push;
     this.body.velocity.y += dirY * push;
+    this.intended?.add(new Phaser.Math.Vector2(dirX * push, dirY * push));
+    const boss = this.kind === 'boss';
+    for (const el of elements) {
+      if (el === 'fire') this.burnTime = 3; // pega fogo: perde vida por 3 s
+      if (el === 'ice') this.freezeTime = boss ? 0.35 : 1; // para um instante
+      if (el === 'sand' || el === 'water') {
+        // Lento por 3 s (areia um pouco mais)
+        this.slowTime = 3;
+        this.slowFactor = el === 'sand' ? 0.45 : 0.55;
+        this.slowColor = ELEMENT_COLOR[el];
+      }
+    }
     if (this.hp <= 0) this.die();
+  }
+
+  /** Queimando, congelado ou lento: aplica e diz se o inimigo pode agir neste quadro. */
+  private updateStatus(dt: number): boolean {
+    if (this.burnTime > 0) {
+      this.burnTime -= dt;
+      this.burnTick -= dt;
+      if (this.burnTick <= 0) {
+        this.burnTick = 0.5;
+        this.hp -= 0.4;
+        this.hurtFlash = 0.06;
+        if (this.hp <= 0) {
+          this.die();
+          return false;
+        }
+      }
+      this.fxTimer -= dt;
+      if (this.fxTimer <= 0) {
+        this.fxTimer = 0.08;
+        const f = this.scene.add
+          .circle(this.x + Phaser.Math.Between(-12, 12), this.sprite.y - Phaser.Math.Between(10, 40), Phaser.Math.FloatBetween(2, 4), Math.random() < 0.5 ? 0xff7a2a : 0xffd04a)
+          .setDepth(this.y + 3);
+        this.scene.tweens.add({ targets: f, y: f.y - 22, alpha: 0, scale: 0.3, duration: 380, onComplete: () => f.destroy() });
+      }
+    }
+    if (this.slowTime > 0) this.slowTime -= dt;
+    if (this.freezeTime > 0) {
+      this.freezeTime -= dt;
+      this.body.velocity.set(0, 0);
+      return false;
+    }
+    return true;
   }
 
   update(dt: number, time: number, world: EnemyWorld) {
@@ -169,10 +223,16 @@ export class Enemy {
       this.sync(time);
       return;
     }
+    if (!this.updateStatus(dt)) {
+      this.sync(time);
+      return;
+    }
     const dx = world.target.x - this.x;
     const dy = world.target.y - this.y;
     const dist = Math.hypot(dx, dy) || 1;
     const v = this.body.velocity;
+    // Lento: o comportamento continua com a velocidade "pretendida" e o corpo anda mais devagar
+    if (this.slowTime > 0 && this.intended) v.copy(this.intended);
     const steer = (speed: number, k: number) => {
       const f = 1 - Math.exp(-k * dt);
       v.x += ((dx / dist) * speed - v.x) * f;
@@ -218,6 +278,10 @@ export class Enemy {
         this.updateBoss(dt, dx, dy, dist, world);
         break;
     }
+    if (this.slowTime > 0) {
+      this.intended = v.clone();
+      v.scale(this.slowFactor);
+    } else this.intended = undefined;
     this.sync(time);
   }
 
@@ -318,6 +382,9 @@ export class Enemy {
     this.sprite.y = y - hover;
     this.sprite.setDepth(y + (this.spec.flying ? 2 : 0));
     if (this.hurtFlash > 0) this.sprite.setTintFill(0xffffff);
+    else if (this.freezeTime > 0) this.sprite.setTint(ELEMENT_COLOR.ice);
+    else if (this.burnTime > 0) this.sprite.setTint(Math.sin(time / 60) > 0 ? 0xffa060 : 0xff7040);
+    else if (this.slowTime > 0) this.sprite.setTint(this.slowColor);
     else if (this.charging <= 0 && this.sprite.isTinted && !this.scene.tweens.isTweening(this.sprite)) this.sprite.clearTint();
   }
 

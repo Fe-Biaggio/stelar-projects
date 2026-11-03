@@ -1,9 +1,23 @@
 import { Rarity } from './rarity';
-import { STAT_STEP, Stats } from './stats';
+import { Element, MultStat, STAT_STEP, Stats } from './stats';
 
 // Itens coletáveis. O frame é a posição em public/assets/items.png (tools/extract_items.py).
 
-export type ItemId = 'can' | 'catnip' | 'brush' | 'churu' | 'yarn' | 'fish' | 'milk' | 'collar' | 'paw' | 'vampire';
+export type ItemId =
+  | 'can'
+  | 'catnip'
+  | 'brush'
+  | 'churu'
+  | 'yarn'
+  | 'fish'
+  | 'milk'
+  | 'collar'
+  | 'paw'
+  | 'vampire'
+  | 'pepper'
+  | 'ice'
+  | 'pinwheel'
+  | 'stone';
 
 /** Efeito de um item usável (ativado com um botão, por um tempo). */
 export interface ActiveEffect {
@@ -21,10 +35,12 @@ export interface ItemInfo {
   effect: string;
   frame: number;
   /** Status que o item passivo aumenta (itens usáveis não têm). */
-  stat?: keyof Stats;
+  stat?: MultStat | 'maxHp';
   rarity: Rarity;
   /** Folha de sprites do item ("items" para passivos, "actives" para usáveis). */
-  texture?: 'items' | 'actives' | 'vampire';
+  texture?: 'items' | 'actives' | 'vampire' | 'elements';
+  /** Item elemental: muda a bola de pelo. */
+  element?: Element;
   /** Quanto o item soma no status (padrão: STAT_STEP = +0,2x). */
   amount?: number;
   /** Não sai em baús, lojas nem drops (recompensa especial). */
@@ -74,6 +90,43 @@ export const ITEMS: Record<ItemId, ItemInfo> = {
     rarity: 'epic',
     hidden: true,
   },
+  // Itens elementais: a bola de pelo ganha um efeito (fogo + gelo = água)
+  pepper: {
+    id: 'pepper',
+    name: 'Pimenta',
+    effect: 'Bola de fogo: o inimigo pega fogo',
+    frame: 0,
+    texture: 'elements',
+    element: 'fire',
+    rarity: 'rare',
+  },
+  ice: {
+    id: 'ice',
+    name: 'Cubo de gelo',
+    effect: 'Bola congelada: o inimigo para um instante',
+    frame: 1,
+    texture: 'elements',
+    element: 'ice',
+    rarity: 'rare',
+  },
+  pinwheel: {
+    id: 'pinwheel',
+    name: 'Catavento de mão',
+    effect: 'Bola de vento: empurra muito mais',
+    frame: 2,
+    texture: 'elements',
+    element: 'wind',
+    rarity: 'uncommon',
+  },
+  stone: {
+    id: 'stone',
+    name: 'Pedra',
+    effect: 'Bola de areia: o inimigo fica lento',
+    frame: 3,
+    texture: 'elements',
+    element: 'sand',
+    rarity: 'uncommon',
+  },
 };
 
 /** Sorteia um item da raridade pedida. */
@@ -84,6 +137,11 @@ export function randomItemOf(rarity: Rarity, rng: () => number = Math.random): I
 
 /** Aplica o efeito do item nos status. A vida é tratada pelo Player (ganha e cura 1 coração). */
 export function applyItem(stats: Stats, item: ItemInfo) {
+  if (item.element) {
+    stats.elements ??= [];
+    if (!stats.elements.includes(item.element)) stats.elements.push(item.element);
+    return;
+  }
   if (!item.stat) return; // itens usáveis não mexem nos status
   if (item.stat === 'maxHp') stats.maxHp += 1;
   else stats[item.stat] = Math.round((stats[item.stat] + (item.amount ?? STAT_STEP)) * 10) / 10;

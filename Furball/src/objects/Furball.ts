@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { CatId } from '../cats';
 import { FLOOR } from '../config';
-import { Stats } from '../stats';
+import { ELEMENT_COLOR, ShotElement, Stats, shotElements } from '../stats';
 
 const SHOT_SPEED = 430; // pixels por segundo (com velocidade do tiro 1x)
 const RANGE = 220; // distância percorrida antes de começar a cair (~5 tiles no total, com a queda)
@@ -73,6 +73,9 @@ export class Furball {
   owner = 0;
   /** Dano causado ao acertar. */
   readonly damage: number;
+  /** Efeitos da bola (fogo, gelo, vento, areia, água). */
+  readonly elements: ShotElement[];
+  private trailTimer = 0;
   /** Raio usado nas colisões. */
   readonly hitRadius: number;
   private readonly sprite: Phaser.GameObjects.Image;
@@ -98,6 +101,7 @@ export class Furball {
     this.vx = dir.x * speed + inherited.x * INHERIT;
     this.vy = dir.y * speed + inherited.y * INHERIT;
     this.damage = stats.damage;
+    this.elements = shotElements(stats);
     const scale = SCALE * stats.size;
     this.hitRadius = RADIUS * scale;
     this.height = startHeight;
@@ -106,6 +110,9 @@ export class Furball {
     this.sprite = scene.add.image(x, y - startHeight, `furball_${cat}`).setScale(scale * 0.25);
     // Sai de dentro da boca crescendo rapidinho
     scene.tweens.add({ targets: this.sprite, scale, duration: 110, ease: 'Back.Out' });
+    // Bola com elemento: fica da cor do primeiro (pegando fogo, congelada, de areia, molhada...)
+    const main = this.elements.find((e) => e !== 'wind') ?? this.elements[0];
+    if (main) this.sprite.setTint(ELEMENT_COLOR[main]);
     this.sync();
   }
 
@@ -124,6 +131,7 @@ export class Furball {
     }
     this.sprite.rotation += dt * 9 * Math.sign(this.vx || this.vy);
     this.sync();
+    if (this.elements.length) this.trail(dt);
 
     const hitWall =
       this.x < FLOOR.x + 4 ||
@@ -170,6 +178,23 @@ export class Furball {
         onComplete: () => tuft.destroy(),
       });
     }
+  }
+
+  /** Rastro do elemento: faíscas (fogo), cristais (gelo), riscos (vento), grãos (areia), gotas (água). */
+  private trail(dt: number) {
+    this.trailTimer -= dt;
+    if (this.trailTimer > 0) return;
+    this.trailTimer = 0.05;
+    const el = this.elements[Math.floor(Math.random() * this.elements.length)];
+    const sx = this.sprite.x + Phaser.Math.Between(-4, 4);
+    const sy = this.sprite.y + Phaser.Math.Between(-4, 4);
+    const rise = el === 'fire' ? -14 : el === 'water' || el === 'sand' ? 10 : 0;
+    const dot =
+      el === 'wind'
+        ? this.scene.add.rectangle(sx, sy, 10, 2, ELEMENT_COLOR.wind, 0.7).setRotation(Math.atan2(this.vy, this.vx))
+        : this.scene.add.circle(sx, sy, el === 'ice' ? 2 : 2.5, ELEMENT_COLOR[el], 0.9);
+    dot.setDepth(this.y);
+    this.scene.tweens.add({ targets: dot, y: sy + rise, alpha: 0, scale: 0.3, duration: 260, onComplete: () => dot.destroy() });
   }
 
   private sync() {

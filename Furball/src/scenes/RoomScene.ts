@@ -79,6 +79,24 @@ const DEV_ACTIVE_ITEMS: [ItemId, number, number][] = [
   ['collar', 4, 4],
   ['paw', 8, 4],
 ];
+// Salas de teste à direita do baú (modo desenvolvedor): todos os itens, em duas páginas.
+const DEV_ITEM_PAGES: ItemId[][] = [
+  ['can', 'catnip', 'brush', 'churu', 'yarn', 'fish', 'milk', 'vampire'],
+  ['collar', 'paw', 'pepper', 'ice', 'pinwheel', 'stone'],
+];
+
+/** Posição de cada item na sala de teste: metade na linha de cima, metade na de baixo. */
+function devItemSpots(n: number) {
+  const top = Math.ceil(n / 2);
+  return Array.from({ length: n }, (_, i) => {
+    const row = i < top ? 1 : 5;
+    const k = i < top ? i : i - top;
+    const count = i < top ? top : n - top;
+    const col = Math.round(1 + ((k + 0.5) * 11) / count);
+    return tileCenter(col, row);
+  });
+}
+
 // Gatinhos: chance de dar um item a cada moeda / a cada ponto de vida doado.
 const BEGGAR_ITEM_CHANCE = 0.2;
 const VAMPIRE_ITEM_CHANCE = 0.3;
@@ -441,7 +459,8 @@ export class RoomScene extends Phaser.Scene {
       this.items.push(new ItemPickup(this, it.x, it.y, it.id, { kind: 'none' }, it.price));
     }
     for (const p of this.roomState.pickups) this.pickups.push(new Pickup(this, p.x, p.y, p.kind, false, p.tag));
-    if (firstVisit && (type === 'devStart' || type === 'devActives')) this.respawnItems(false);
+    if (firstVisit && (type === 'devStart' || type === 'devActives' || type === 'devItems')) this.respawnItems(false);
+    if (type === 'devItems') this.labelDevItems();
     if ((firstVisit || this.devBombsOnRestart) && type === 'devProps') this.addDevBombs();
     this.devBombsOnRestart = false;
 
@@ -771,13 +790,20 @@ export class RoomScene extends Phaser.Scene {
         sfx(this, 'hit');
         if (this.showDamage) this.showDamageNumber(this.dummy.x, this.dummy.y - 70, f.damage);
       }
-      // Pedras seguram a bola de pelo
+      // Pedras e fogueiras seguram a bola de pelo; bola molhada ou congelada apaga a fogueira
       if (!f.dead && this.rockAt(x, y)) f.burst();
+      if (!f.dead) {
+        const fire = this.fireAt(x, y);
+        if (fire) {
+          f.burst();
+          if (f.elements.includes('water') || f.elements.includes('ice')) this.putOut(fire);
+        }
+      }
       for (const e of this.enemies) {
         if (f.dead || !e.hits(x, y, f.hitRadius)) continue;
         const d = f.direction;
         f.burst();
-        e.takeHit(d.x, d.y, f.damage);
+        e.takeHit(d.x, d.y, f.damage, f.elements);
         sfx(this, 'hit');
         if (this.showDamage) this.showDamageNumber(e.x, e.y - 50, f.damage);
       }
@@ -800,6 +826,7 @@ export class RoomScene extends Phaser.Scene {
     this.furballs = this.furballs.filter((f) => !f.dead);
 
     for (const slot of this.slots) this.checkSpikes(slot);
+    this.updateFires(time);
     this.checkItems(time);
     this.checkPickups(time);
     this.updateBombs(dt, time);
@@ -1016,8 +1043,8 @@ export class RoomScene extends Phaser.Scene {
       const body = this.physics.add.staticBody(r.x + 8, r.y + 8, r.w - 16, r.h - 14);
       return { prop, body };
     }
-    const tex = prop.kind === 'rock' ? (prop.broken ? 'rubble' : 'rock') : prop.broken ? `${prop.kind}_broken` : prop.kind;
-    const lift = prop.kind === 'table' ? 14 : prop.kind === 'chair' ? 8 : 4;
+    const tex = this.propTexture(prop);
+    const lift = prop.kind === 'table' ? 14 : prop.kind === 'chair' ? 8 : prop.kind === 'fire' ? 10 : 4;
     const sprite = this.add.image(cx, bottom + lift, tex).setOrigin(0.5, 1).setDepth(bottom);
     if (prop.broken) sprite.setDepth(-57); // destroços ficam no chão
     const body =
@@ -1025,6 +1052,42 @@ export class RoomScene extends Phaser.Scene {
         ? this.physics.add.staticBody(r.x + 4, r.y + 8, r.w - 8, r.h - 12)
         : this.physics.add.staticBody(r.x + 8, r.y + 12, r.w - 16, r.h - 18);
     return { prop, body, sprite };
+  }
+
+  /** Desenho de cada elemento (inteiro ou destruído). */
+  private propTexture(p: Prop) {
+    if (p.kind === 'rock') return p.broken ? 'rubble' : 'rock';
+    if (p.kind === 'fire') return p.broken ? 'campfire_out' : 'campfire';
+    return p.broken ? `${p.kind}_broken` : p.kind;
+  }
+
+  /** Fogueiras: as chamas mexem, e encostar queima (meio coração). */
+  private updateFires(time: number) {
+    const frame = Math.floor(time / 120) % 3;
+    for (const o of this.propObjs) {
+      if (o.prop.kind !== 'fire' || o.prop.broken) continue;
+      o.sprite?.setFrame(frame);
+      const r = propRect(o.prop);
+      for (const s of this.slots) {
+        const p = s.player;
+        if (!p || p.dead) continue;
+        const b = p.body;
+        // Encostar = chegar a 4 px do corpo da fogueira (que bloqueia a passagem)
+        const touching = b.right > r.x + 4 && b.left < r.x + r.w - 4 && b.bottom > r.y + 8 && b.top < r.y + r.h - 2;
+        if (touching) p.takeDamage(1, r.x + r.w / 2, r.y + r.h / 2);
+      }
+    }
+  }
+
+  /** Apaga a fogueira (bomba ou bola molhada/congelada). */
+  private putOut(o: PropObj) {
+    o.prop.broken = true;
+    o.sprite?.setTexture('campfire_out').setDepth(-57);
+    const r = propRect(o.prop);
+    for (let i = 0; i < 6; i++) {
+      const puff = this.add.circle(r.x + r.w / 2 + Phaser.Math.Between(-14, 14), r.y + 20, Phaser.Math.Between(5, 9), 0xb8b0a8, 0.6).setDepth(r.y + 70);
+      this.tweens.add({ targets: puff, y: puff.y - 40, alpha: 0, scale: 1.8, duration: 600, onComplete: () => puff.destroy() });
+    }
   }
 
   /** Colisões do gato: pedras e buracos sempre; a mesa só quando ele está no chão. */
@@ -1049,6 +1112,11 @@ export class RoomScene extends Phaser.Scene {
 
   private rockAt(x: number, y: number) {
     return this.propAt(x, y)?.kind === 'rock';
+  }
+
+  private fireAt(x: number, y: number) {
+    const p = this.propAt(x, y);
+    return p?.kind === 'fire' ? this.propObjs.find((o) => o.prop === p) : undefined;
   }
 
   /**
@@ -1330,6 +1398,15 @@ export class RoomScene extends Phaser.Scene {
       return;
     }
     const spawn: ItemSpawn = animate ? { kind: 'pop' } : { kind: 'none' };
+    if (this.roomDef.type === 'devItems') {
+      const ids = DEV_ITEM_PAGES[this.roomDef.itemPage ?? 0];
+      const spots = devItemSpots(ids.length);
+      ids.forEach((id, i) => {
+        if (this.items.some((it) => !it.collected && it.info.id === id)) return;
+        this.items.push(new ItemPickup(this, spots[i].x, spots[i].y, id, spawn));
+      });
+      return;
+    }
     if (this.roomDef.type === 'devActives') {
       for (const [id, col, row] of DEV_ACTIVE_ITEMS) {
         if (this.items.some((i) => !i.collected && i.info.id === id)) continue;
@@ -1419,9 +1496,12 @@ export class RoomScene extends Phaser.Scene {
       const nx = Phaser.Math.Clamp(x, r.x, r.x + r.w);
       const ny = Phaser.Math.Clamp(y, r.y, r.y + r.h);
       if (Phaser.Math.Distance.Between(x, y, nx, ny) > BLAST_RADIUS - 20) continue;
+      if (p.kind === 'fire') {
+        this.putOut(o);
+        continue;
+      }
       p.broken = true;
-      const tex = p.kind === 'rock' ? 'rubble' : `${p.kind}_broken`;
-      o.sprite?.setTexture(tex).setDepth(-57);
+      o.sprite?.setTexture(this.propTexture(p)).setDepth(-57);
     }
     const seed = `${Date.now()}-${Math.random()}`;
     drawScorch(this, x, y, seed);
@@ -1672,6 +1752,29 @@ export class RoomScene extends Phaser.Scene {
     const spot = this.freeDropSpot(feet.x, feet.y - 40);
     this.items.push(new ItemPickup(this, spot.x, spot.y, 'vampire', { kind: 'pop' }));
     this.showBanner('Presente do vampiro!', 'Uma capa e dois dentinhos', '#c83040');
+  }
+
+  /** Nome embaixo de cada item na sala de teste. */
+  private labelDevItems() {
+    const ids = DEV_ITEM_PAGES[this.roomDef.itemPage ?? 0];
+    const spots = devItemSpots(ids.length);
+    ids.forEach((id, i) => {
+      this.add
+        .text(spots[i].x, spots[i].y + 22, ITEMS[id].name, { fontFamily: 'monospace', fontSize: '11px', color: '#b8a898', stroke: '#1a1210', strokeThickness: 3 })
+        .setOrigin(0.5, 0)
+        .setDepth(-40);
+    });
+    const title = this.roomDef.itemPage ? 'Itens usáveis e elementais' : 'Itens passivos';
+    this.add
+      .text(GAME_WIDTH / 2, GAME_HEIGHT / 2 + 10, `${title}
+"+ Repor itens" coloca tudo de volta`, {
+        fontFamily: 'monospace',
+        fontSize: '14px',
+        color: '#8a7a6a',
+        align: 'center',
+      })
+      .setOrigin(0.5)
+      .setDepth(-40);
   }
 
   /** Moedas e corações para testar os gatinhos (modo desenvolvedor). */
