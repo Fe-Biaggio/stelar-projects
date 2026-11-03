@@ -7,9 +7,10 @@ import { DoorSide } from './room';
 //  - cadeira: o gato sobe; inimigos de chão desviam;
 //  - mesa (2 tiles): só dá para subir a partir de uma cadeira; em cima dela, só inimigos que
 //    voam alcançam o gato;
-//  - fogueira: bloqueia e queima quem encosta; a bomba (ou uma bola molhada/congelada) apaga.
+//  - fogueira: bloqueia e queima quem encosta; a bomba (ou uma bola molhada/congelada) apaga;
+//  - rachadura: marca sutil no chão; o gato faz xixi, cava e acha um item (não bloqueia).
 
-export type PropKind = 'rock' | 'hole' | 'chair' | 'table' | 'fire';
+export type PropKind = 'rock' | 'hole' | 'chair' | 'table' | 'fire' | 'crack';
 
 export interface Prop {
   kind: PropKind;
@@ -17,7 +18,8 @@ export interface Prop {
   row: number;
   /** Largura em tiles (a mesa ocupa 2). */
   w: number;
-  /** Destruído por bomba (pedra, cadeira ou mesa): vira destroços e não bloqueia mais. */
+  /** Destruído por bomba (pedra, cadeira ou mesa): vira destroços e não bloqueia mais.
+   *  Na rachadura: já foi cavada. */
   broken?: boolean;
   /** Fogueira: acertos de bola de pelo comum (apaga no 3º). */
   hits?: number;
@@ -43,12 +45,12 @@ export function tileCenter(col: number, row: number) {
 
 /** Bloqueia o gato andando no chão? (o gato sobe na cadeira; destroços não bloqueiam) */
 export function blocksWalk(p: Prop) {
-  return !p.broken && p.kind !== 'chair';
+  return !p.broken && p.kind !== 'chair' && p.kind !== 'crack';
 }
 
 /** A bomba destrói este elemento? (buracos não) */
 export function breakable(p: Prop) {
-  return p.kind !== 'hole';
+  return p.kind !== 'hole' && p.kind !== 'crack';
 }
 
 const CENTER_COL = Math.floor(ROOM_COLS / 2);
@@ -153,10 +155,23 @@ export function generateProps(doors: DoorSide[], rng: () => number = Math.random
         if (chairs === 0) props.splice(props.findIndex((p) => p.kind === 'table'), 1); // mesa sem cadeira não serve
       } else cluster('rock', 2 + rand(3));
     }
-    if (allConnected(props)) return props;
+    if (!allConnected(props)) continue;
+    // De vez em quando, uma rachadura para cavar num tile livre
+    if (rng() < CRACK_CHANCE) {
+      const spots: [number, number][] = [];
+      for (let r = 0; r < ROOM_ROWS; r++) for (let c = 0; c < ROOM_COLS; c++) if (free(c, r)) spots.push([c, r]);
+      if (spots.length) {
+        const [c, r] = spots[rand(spots.length)];
+        put('crack', c, r);
+      }
+    }
+    return props;
   }
   return [];
 }
+
+/** Chance de uma sala comum ter uma rachadura para cavar. */
+export const CRACK_CHANCE = 0.2;
 
 /** Sala fixa de testes do modo desenvolvedor, com um exemplo de cada elemento. */
 export function devPropsLayout(): Prop[] {
@@ -171,5 +186,6 @@ export function devPropsLayout(): Prop[] {
     { kind: 'hole', col: 3, row: 5, w: 1 },
     { kind: 'hole', col: 9, row: 5, w: 1 },
     { kind: 'fire', col: 6, row: 1, w: 1 },
+    { kind: 'crack', col: 6, row: 5, w: 1 },
   ];
 }

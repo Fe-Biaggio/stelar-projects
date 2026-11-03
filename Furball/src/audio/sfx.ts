@@ -30,7 +30,9 @@ export type SfxName =
   | 'meow'
   | 'power'
   | 'level'
-  | 'join';
+  | 'join'
+  | 'pee'
+  | 'dig';
 
 const SOUNDS: Record<SfxName, (number | undefined)[]> = {
   shoot: [0.35, 0.05, 520, 0.01, 0.02, 0.06, 0, 1.6, -6],
@@ -58,6 +60,8 @@ const SOUNDS: Record<SfxName, (number | undefined)[]> = {
   power: [0.6, 0, 300, 0.02, 0.2, 0.3, 0, 1, 10, , 150, 0.06],
   level: [0.6, 0, 400, 0.05, 0.2, 0.4, 0, 1, -6],
   join: [0.4, 0, 660, 0.01, 0.05, 0.1, 0, 1, , , 330, 0.05],
+  pee: [0.12, 0.2, 1800, 0.1, 0.5, 0.25, 4, 0, -1],
+  dig: [0.25, 0.1, 140, 0, 0.04, 0.08, 4, 1, -2],
 };
 
 const lastPlayed = new Map<SfxName, number>();

@@ -219,6 +219,12 @@ export interface Slot {
   outShown?: boolean;
   /** Nome do jogador embaixo do gato (VS). */
   nameTag?: Phaser.GameObjects.Text;
+  /** Fazendo xixi e cavando (parado). */
+  digging?: boolean;
+  /** Aviso "cavar" em cima do gato, quando ele está numa rachadura. */
+  digPrompt?: Phaser.GameObjects.Container;
+  /** Botão A (atirar) seguro no quadro anterior (jogador remoto). */
+  lastFire?: boolean;
 }
 
 function weightedPick<T>(list: [T, number][]): T {
@@ -477,6 +483,7 @@ export class RoomScene extends Phaser.Scene {
     kb.on('keydown-E', () => this.localSlot && this.placeBomb(this.localSlot));
     kb.on('keydown-SPACE', () => this.localSlot && this.useActive(this.localSlot));
     kb.on('keydown-Q', () => this.localSlot && this.useActive(this.localSlot));
+    kb.on('keydown-F', () => this.localSlot && this.tryDig(this.localSlot));
     kb.on('keydown-M', () => this.localSlot?.map?.toggle());
     kb.on('keydown-TAB', () => this.localSlot?.map?.toggle());
 
@@ -735,6 +742,7 @@ export class RoomScene extends Phaser.Scene {
     if (padMove.x || padMove.y) move.set(padMove.x, padMove.y);
     if (this.pad.bombPressed) this.placeBomb(slot);
     if (this.pad.itemPressed) this.useActive(slot);
+    if (this.pad.pressed(BTN.A)) this.tryDig(slot);
     if (this.pad.mapPressed) slot.map?.toggle();
     if (this.pad.pressed(BTN.START)) this.backToSelect();
     if (this.touch && this.touch.move.lengthSq() > 0) move.copy(this.touch.move);
@@ -759,6 +767,8 @@ export class RoomScene extends Phaser.Scene {
       if (acts.bomb) this.placeBomb(slot);
       if (acts.item) this.useActive(slot);
       if (acts.map) slot.map?.toggle();
+      if (inp.fire && !slot.lastFire) this.tryDig(slot);
+      slot.lastFire = inp.fire;
       slot.aim = this.resolveFire(slot, inp.aim, inp.fire);
     }
   }
@@ -799,7 +809,20 @@ export class RoomScene extends Phaser.Scene {
       vs: this.isVs,
       combat: this.inCombat,
       step: (to) => this.walkStep(feet, to),
+      clear: (to) => this.clearShot(me, to),
     };
+  }
+
+  /** Nada (pedra ou fogueira) entre os dois pontos, para a bola de pelo passar. */
+  private clearShot(from: { x: number; y: number }, to: { x: number; y: number }) {
+    const n = Math.ceil(Phaser.Math.Distance.Between(from.x, from.y, to.x, to.y) / 16);
+    for (let i = 1; i < n; i++) {
+      const x = from.x + ((to.x - from.x) * i) / n;
+      const y = from.y + ((to.y - from.y) * i) / n;
+      const p = this.propAt(x, y + 10);
+      if (p && (p.kind === 'rock' || p.kind === 'fire')) return false;
+    }
+    return true;
   }
 
   /**
@@ -888,6 +911,11 @@ export class RoomScene extends Phaser.Scene {
       const player = slot.player;
       if (!player) continue;
       this.updateElevation(slot);
+      if (slot.digging) {
+        slot.move.set(0, 0);
+        slot.aim = null;
+      }
+      this.updateDigPrompt(slot);
       const shot = player.update(slot.move, slot.aim, dt, time);
       if (slot.nameTag) {
         const feet = player.feet;
@@ -1172,6 +1200,11 @@ export class RoomScene extends Phaser.Scene {
       const body = this.physics.add.staticBody(r.x + 8, r.y + 8, r.w - 16, r.h - 14);
       return { prop, body };
     }
+    if (prop.kind === 'crack') {
+      // Marca no chão (não bloqueia nada)
+      const sprite = this.add.image(r.x + r.w / 2, r.y + r.h / 2 + 4, prop.broken ? 'dug' : 'crack').setDepth(-58);
+      return { prop, sprite };
+    }
     const tex = this.propTexture(prop);
     const lift = prop.kind === 'table' ? 14 : prop.kind === 'chair' ? 8 : prop.kind === 'fire' ? 10 : 4;
     const sprite = this.add.image(cx, bottom + lift, tex).setOrigin(0.5, 1).setDepth(bottom);
@@ -1207,6 +1240,106 @@ export class RoomScene extends Phaser.Scene {
         if (touching) p.takeDamage(1, r.x + r.w / 2, r.y + r.h / 2);
       }
     }
+  }
+
+  // ---------- Rachadura: xixi, cavar e achar um item ----------
+
+  /** Rachadura ainda não cavada embaixo do gato (só fora de combate). */
+  private crackUnder(slot: Slot): PropObj | undefined {
+    const p = slot.player;
+    if (!p || p.dead || this.inCombat || slot.digging || slot.height > 0) return undefined;
+    const prop = this.propAt(p.feet.x, p.feet.y - 8);
+    return prop?.kind === 'crack' ? this.propObjs.find((o) => o.prop === prop) : undefined;
+  }
+
+  /** Aviso "cavar" em cima do gato quando ele pisa numa rachadura (só ele vê). */
+  private updateDigPrompt(slot: Slot) {
+    const show = !!this.crackUnder(slot);
+    if (!show) {
+      slot.digPrompt?.destroy();
+      slot.digPrompt = undefined;
+      return;
+    }
+    const feet = slot.player!.feet;
+    if (!slot.digPrompt) {
+      const label = this.touch && slot.local ? 'Cavar (toque)' : 'Cavar (A / X / F)';
+      const text = this.add
+        .text(0, 0, label, { fontFamily: 'monospace', fontSize: '13px', color: '#f2e6cf', stroke: '#1a1210', strokeThickness: 4 })
+        .setOrigin(0.5);
+      const bg = this.add.rectangle(0, 0, text.width + 16, 24, 0x2a2220, 0.85).setStrokeStyle(2, 0xf2c879);
+      const c = this.add.container(feet.x, feet.y - 100, [bg, text]).setDepth(35_000).setSize(text.width + 16, 24);
+      markOwner(c, slot.ps.idx);
+      if (!slot.local) this.cameras.main.ignore(c);
+      else {
+        c.setInteractive({ useHandCursor: true });
+        c.on('pointerdown', () => this.tryDig(slot));
+      }
+      this.tweens.add({ targets: c, scale: 1.08, duration: 450, yoyo: true, repeat: -1 });
+      slot.digPrompt = c;
+    }
+    slot.digPrompt.setPosition(feet.x, feet.y - 100 - slot.player!.elevation);
+  }
+
+  /** Botão de ação na rachadura: o gato faz xixi, cava (enterra o xixi) e acha um item. */
+  private tryDig(slot: Slot): boolean {
+    const crack = this.crackUnder(slot);
+    if (!crack) return false;
+    const player = slot.player!;
+    slot.digging = true;
+    slot.digPrompt?.destroy();
+    slot.digPrompt = undefined;
+    const r = propRect(crack.prop);
+    const cx = r.x + r.w / 2;
+    const cy = r.y + r.h / 2 + 6;
+    // O gato vira de costas e a poça aparece logo atrás dele (visível)
+    player.face('up');
+    const py = player.feet.y + 12;
+    // 1) Xixi: poça amarela crescendo na rachadura
+    sfx(this, 'pee');
+    const puddle = this.add.ellipse(player.feet.x, py, 48, 20, 0xf2d64a, 0.75).setDepth(-57).setScale(0.15);
+    this.tweens.add({ targets: puddle, scale: 1, duration: 800, ease: 'Sine.easeOut' });
+    for (let i = 0; i < 8; i++) {
+      this.time.delayedCall(i * 90, () => {
+        const drop = this.add.circle(player.feet.x + Phaser.Math.Between(-4, 4), player.feet.y - 10, 2, 0xf2d64a, 0.9).setDepth(player.feet.y + 1);
+        this.tweens.add({ targets: drop, y: py, alpha: 0.3, duration: 220, onComplete: () => drop.destroy() });
+      });
+    }
+    // 2) Cavar: terra voando, a poça some embaixo da terra
+    this.time.delayedCall(1000, () => {
+      if (!slot.player || slot.player.dead) {
+        slot.digging = false;
+        puddle.destroy();
+        return;
+      }
+      player.wiggle(7);
+      for (let i = 0; i < 3; i++) this.time.delayedCall(i * 380, () => sfx(this, 'dig'));
+      for (let i = 0; i < 18; i++) {
+        this.time.delayedCall(i * 60, () => {
+          const dirt = this.add.circle(player.feet.x + Phaser.Math.Between(-10, 10), py, Phaser.Math.Between(2, 4), Phaser.Utils.Array.GetRandom([0x6a4628, 0x8a6038, 0x4a3018]), 1).setDepth(py + 2);
+          this.tweens.add({
+            targets: dirt,
+            x: dirt.x + Phaser.Math.Between(-50, 50),
+            y: { value: py - Phaser.Math.Between(20, 50), duration: 200, yoyo: true, ease: 'Quad.easeOut' },
+            alpha: 0,
+            duration: 420,
+            onComplete: () => dirt.destroy(),
+          });
+        });
+      }
+      this.tweens.add({ targets: puddle, alpha: 0, duration: 900, onComplete: () => puddle.destroy() });
+      this.time.delayedCall(700, () => crack.sprite?.setTexture('dug'));
+    });
+    // 3) Achou um item (a sorte ajuda)
+    this.time.delayedCall(2300, () => {
+      crack.prop.broken = true;
+      crack.sprite?.setTexture('dug');
+      slot.digging = false;
+      const id = randomItemOf(rollRarity(this.luck));
+      const spot = this.freeFloorSpot(cx, cy + 90);
+      this.items.push(new ItemPickup(this, spot.x, spot.y, id, { kind: 'toss', fromX: cx, fromY: cy }));
+      sfx(this, 'chest');
+    });
+    return true;
   }
 
   /** Tamanho da chama: diminui a cada acerto de bola de pelo comum. */
@@ -1841,6 +1974,7 @@ export class RoomScene extends Phaser.Scene {
       return;
     }
     if (this.leaving || this.finished) return;
+    if (this.tryDig(slot)) return;
     const player = slot.player;
     const item = player?.active;
     if (!player || player.dead || !item?.active) return;

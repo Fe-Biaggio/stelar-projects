@@ -152,6 +152,26 @@ export class Player extends Phaser.Events.EventEmitter {
     return this.lift;
   }
 
+  /** Vira para um lado (sem andar). */
+  face(dir: Facing) {
+    this.facing = dir;
+    this.sprite.setFrame(FRAME[dir]);
+  }
+
+  /** Mexe o corpo (cavando): `times` vaivéns rápidos. */
+  wiggle(times: number) {
+    this.scene.tweens.add({
+      targets: this.sprite,
+      scaleX: SPRITE_SCALE * 1.12,
+      scaleY: SPRITE_SCALE * 0.88,
+      angle: { from: -8, to: 8 },
+      duration: 90,
+      yoyo: true,
+      repeat: times - 1,
+      onComplete: () => this.sprite.setScale(SPRITE_SCALE).setAngle(0),
+    });
+  }
+
   get feet() {
     return { x: this.body.center.x, y: this.body.bottom - 2 };
   }

@@ -21,6 +21,8 @@ export interface BotView {
   combat: boolean;
   /** Próximo ponto do caminho até `to`, desviando dos obstáculos. */
   step: (to: { x: number; y: number }) => { x: number; y: number };
+  /** O tiro passa daqui até `to` sem bater em pedra ou fogueira? */
+  clear: (to: { x: number; y: number }) => boolean;
 }
 
 const ALIGN = 30; // px: alinhado o bastante para atirar
@@ -45,6 +47,8 @@ export class BotBrain {
   private last = { x: 0, y: 0 };
   private itemIn = 4;
   private strafe = 1;
+  /** Segundos sem conseguir atirar no alvo (alinhado e com caminho livre). */
+  private noShot = 0;
 
   think(v: BotView, dt: number): RemoteInput {
     this.thinkIn -= dt;
@@ -75,14 +79,22 @@ export class BotBrain {
       const dist = Math.hypot(dx, dy);
       if (Math.abs(dy) < ALIGN) aim = dx > 0 ? 'right' : 'left';
       else if (Math.abs(dx) < ALIGN) aim = dy > 0 ? 'down' : 'up';
+      const canShoot = !!aim && dist < 420 && v.clear(target);
+      this.noShot = canShoot ? 0 : this.noShot + THINK;
       if (dist < TOO_CLOSE) {
         // Perto demais: se afasta
         mx = -Math.sign(dx);
         my = -Math.sign(dy);
-      } else if (!aim) {
-        // Alinha pelo eixo mais fácil
-        if (Math.abs(dx) < Math.abs(dy)) mx = Math.sign(dx);
-        else my = Math.sign(dy);
+      } else if (this.noShot > 3) {
+        // Faz tempo que não consegue atirar (pedra no meio, longe demais): vai até o alvo
+        [mx, my] = toward(v.me, v.step(target));
+        if (this.noShot > 6) this.noShot = 0;
+      } else if (!canShoot) {
+        // Vai para a linha ou a coluna do alvo (a mais perto), contornando os obstáculos
+        const row = { x: v.me.x, y: target.y };
+        const col = { x: target.x, y: v.me.y };
+        const spot = aim || Math.abs(dy) < Math.abs(dx) ? row : col;
+        [mx, my] = toward(v.me, v.step(aim ? target : spot));
       } else {
         // Já alinhado: anda um pouco de lado para não ficar parado
         if (Math.random() < 0.15) this.strafe = -this.strafe;

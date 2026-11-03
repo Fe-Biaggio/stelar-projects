@@ -25,6 +25,8 @@ export class PreloadScene extends Phaser.Scene {
     this.load.spritesheet('elements', 'assets/elements.png', { frameWidth: 64, frameHeight: 64 });
     this.load.spritesheet('campfire', 'assets/campfire.png', { frameWidth: 64, frameHeight: 80 });
     this.load.image('campfire_out', 'assets/campfire_out.png');
+    this.load.image('crack', 'assets/crack.png');
+    this.load.image('dug', 'assets/dug.png');
     for (const p of ['rock', 'rubble', 'chair', 'chair_broken', 'table', 'table_broken']) {
       this.load.image(p, `assets/${p}.png`);
     }
