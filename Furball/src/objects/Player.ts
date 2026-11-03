@@ -125,7 +125,7 @@ export class Player extends Phaser.Events.EventEmitter {
     this.updateInvulnerability(dt);
 
     const moving = move.lengthSq() > 0;
-    if (moving) move.normalize();
+    if (move.lengthSq() > 1) move.normalize(); // analógico pela metade anda mais devagar
 
     // Aceleração suave, igual em qualquer taxa de quadros.
     const k = 1 - Math.exp(-(moving ? ACCEL : DECEL) * dt);

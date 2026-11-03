@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { CATS, CatId, PLAYABLE } from '../cats';
 import { GAME_HEIGHT, GAME_WIDTH } from '../config';
+import { isTouchDevice } from '../ui/TouchControls';
 import { drawRoom } from '../world/room';
 
 const SPACING = 160;
@@ -36,6 +37,7 @@ export class SelectScene extends Phaser.Scene {
     drawRoom(this);
     this.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0.5).setDepth(-10);
 
+    const touch = isTouchDevice(this);
     const style = { fontFamily: 'monospace', color: '#e8d9c4', stroke: '#1a1210' };
     this.add
       .text(GAME_WIDTH / 2, 118, 'FURBALL', { ...style, fontSize: '64px', strokeThickness: 8, color: '#f2c879' })
@@ -45,7 +47,7 @@ export class SelectScene extends Phaser.Scene {
       .text(GAME_WIDTH / 2, FEET_Y + 44, '', { ...style, fontSize: '28px', strokeThickness: 5 })
       .setOrigin(0.5);
     this.add
-      .text(GAME_WIDTH / 2, GAME_HEIGHT - 88, '← →  escolher     Enter  jogar', { ...style, fontSize: '18px', strokeThickness: 4 })
+      .text(GAME_WIDTH / 2, GAME_HEIGHT - 88, touch ? 'Toque para escolher  ·  toque de novo para jogar' : '← →  escolher     Enter  jogar', { ...style, fontSize: '18px', strokeThickness: 4 })
       .setOrigin(0.5)
       .setAlpha(0.8);
 
@@ -54,11 +56,22 @@ export class SelectScene extends Phaser.Scene {
       const shadow = this.add.ellipse(x, FEET_Y - 4, 64, 18, 0x000000, 0.4);
       const sprite = this.add.sprite(x, FEET_Y, `cat_${id}`, 0).setOrigin(0.5, 0.97).setScale(SCALE);
       sprite.setInteractive({ useHandCursor: true });
-      sprite.on('pointerover', () => this.select(i));
-      sprite.on('pointerdown', () => {
-        this.select(i);
-        this.start();
-      });
+      if (touch) {
+        // No toque: o primeiro toque escolhe, o segundo (no mesmo gato) começa.
+        sprite.on('pointerup', () => {
+          if (this.index !== i) this.select(i);
+          else {
+            this.goFullscreen();
+            this.start();
+          }
+        });
+      } else {
+        sprite.on('pointerover', () => this.select(i));
+        sprite.on('pointerdown', () => {
+          this.select(i);
+          this.start();
+        });
+      }
       return { id, sprite, shadow };
     });
     this.arrow = this.add.triangle(0, 0, 0, 0, 20, 0, 10, 14, 0xf2c879).setStrokeStyle(3, 0x1a1210);
@@ -100,6 +113,18 @@ export class SelectScene extends Phaser.Scene {
     this.nameText.setText(CATS[chosen.id].name);
     this.nameText.setX(chosen.sprite.x);
     this.arrow.setPosition(chosen.sprite.x, FEET_Y - 128);
+  }
+
+  /** No celular, tenta tela cheia na horizontal (se o navegador permitir). */
+  private goFullscreen() {
+    if (this.scale.isFullscreen) return;
+    try {
+      this.scale.startFullscreen();
+      const orientation = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> };
+      orientation.lock?.('landscape').catch(() => undefined);
+    } catch {
+      // sem tela cheia: o jogo continua normalmente
+    }
   }
 
   private start() {

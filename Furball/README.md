@@ -109,6 +109,17 @@ O painel de status mostra as chances atuais. Na sala do tesouro, o botão
 **+ Novo baú** fecha o baú de novo para testar várias aberturas. As salas guardam o que ficou
 nelas (baú aberto, itens no chão) quando o gato sai e volta.
 
+### Jogar no celular
+
+Em telas de toque aparecem controles na tela: analógico na metade esquerda (nasce onde o
+dedo encosta) para andar, 4 botões de tiro em losango à direita e o botão de bomba. Na
+seleção, o primeiro toque escolhe o gato e o segundo começa. Com o celular em pé, a página
+pede para girar.
+
+Versão publicada para testar no celular: https://claude.ai/artifact/6K96NXayqtfjv1uhSQq6Mp
+(privada). Para atualizar: `npm run build`, `python tools/artifact_page.py` e publicar de novo
+`dist/furball.html` com os arquivos de `dist/assets/`.
+
 ## Estrutura
 
 ```
@@ -127,6 +138,7 @@ Furball/
 │   ├── stats.ts         # status do gato (multiplicadores)
 │   ├── objects/         # jogador, inimigos, projéteis...
 │   ├── scenes/          # carregamento, seleção de personagem, sala
+│   ├── ui/              # controles de toque
 │   └── world/           # desenho da sala, explosão e empurrão
 └── tools/               # scripts para recortar sprites das folhas
 ```

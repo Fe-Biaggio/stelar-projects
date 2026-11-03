@@ -14,6 +14,7 @@ import { HEART_POINTS, PICKUP_FRAME, PickupKind, addPickup, isHeart, useKey } fr
 import { RARITY_INFO, RARITY_ORDER, rarityOdds, rollRarity } from '../rarity';
 import { RoomId, RoomState, Run, newRun } from '../run';
 import { STAT_LABELS, Stats, formatMult } from '../stats';
+import { TouchControls, isTouchDevice } from '../ui/TouchControls';
 import { drawScorch, playExplosion } from '../world/explosion';
 import { priceOf, rollShopItems } from '../shop';
 import { DoorSide, drawLockedDoor, drawRoom } from '../world/room';
@@ -112,6 +113,7 @@ export class RoomScene extends Phaser.Scene {
   private pickups: Pickup[] = [];
   private bombs: Bomb[] = [];
   private vendor?: Vendor;
+  private touch?: TouchControls;
   /** Desenhos das portas trancadas desta sala, por lado. */
   private locks = new Map<DoorSide, Phaser.GameObjects.Graphics>();
   /** Evita repetir o aviso de "precisa de chave/moedas" a cada quadro. */
@@ -207,12 +209,13 @@ export class RoomScene extends Phaser.Scene {
     kb.addCapture([K.UP, K.DOWN, K.LEFT, K.RIGHT]); // não rolar a página com as setas
     kb.on('keydown-ESC', () => this.backToSelect());
     kb.on('keydown-E', () => this.placeBomb());
+    this.touch = isTouchDevice(this) ? new TouchControls(this, () => this.placeBomb()) : undefined;
 
     this.createHud();
 
     if (!this.enterFrom) {
       this.hint = this.add
-        .text(GAME_WIDTH / 2, GAME_HEIGHT - WALL - 28, 'WASD andar  ·  setas atirar  ·  E bomba', {
+        .text(GAME_WIDTH / 2, GAME_HEIGHT - WALL - 28, this.touch ? 'Esquerda: andar  ·  direita: atirar e bomba' : 'WASD andar  ·  setas atirar  ·  E bomba', {
           fontFamily: 'monospace',
           fontSize: '18px',
           color: '#e8d9c4',
@@ -254,7 +257,8 @@ export class RoomScene extends Phaser.Scene {
 
     const k = this.moveKeys;
     this.move.set((k.d.isDown ? 1 : 0) - (k.a.isDown ? 1 : 0), (k.s.isDown ? 1 : 0) - (k.w.isDown ? 1 : 0));
-    const aim = this.currentAim();
+    if (this.touch && this.touch.move.lengthSq() > 0) this.move.copy(this.touch.move);
+    const aim = this.currentAim() ?? this.touch?.aim ?? null;
 
     if (this.hint && (this.move.lengthSq() > 0 || aim)) {
       const hint = this.hint;
@@ -915,7 +919,7 @@ export class RoomScene extends Phaser.Scene {
       .setAlpha(0)
       .setDepth(30_001);
     const sub = this.add
-      .text(cx, cy + 34, 'R para recomeçar  ·  Esc para trocar de gato', { ...style, fontSize: '20px', strokeThickness: 4 })
+      .text(cx, cy + 34, this.touch ? 'Toque para recomeçar' : 'R para recomeçar  ·  Esc para trocar de gato', { ...style, fontSize: '20px', strokeThickness: 4 })
       .setOrigin(0.5)
       .setAlpha(0)
       .setDepth(30_001);
@@ -924,6 +928,11 @@ export class RoomScene extends Phaser.Scene {
 
     const kb = this.input.keyboard!;
     kb.once('keydown-R', () => this.scene.restart({ cat: this.cat }));
+    // No celular: tocar na tela recomeça (o botão Início continua levando à seleção)
+    this.time.delayedCall(900, () => {
+      overlay.setInteractive();
+      overlay.once('pointerdown', () => this.scene.restart({ cat: this.cat }));
+    });
   }
 
   // ---------- Cenário ----------
