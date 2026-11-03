@@ -16,10 +16,12 @@ export class PreloadScene extends Phaser.Scene {
     this.load.spritesheet('hearts', 'assets/hearts.png', { frameWidth: 32, frameHeight: 30 });
     this.load.spritesheet('items', 'assets/items.png', { frameWidth: 64, frameHeight: 64 });
     this.load.spritesheet('pickups', 'assets/pickups.png', { frameWidth: 48, frameHeight: 48 });
+    this.load.spritesheet('enemies', 'assets/enemies.png', { frameWidth: 72, frameHeight: 72 });
+    this.load.image('boss', 'assets/boss.png');
     this.load.spritesheet('chest', 'assets/chest.png', { frameWidth: 80, frameHeight: 80 });
   }
 
   create() {
-    this.scene.start('Select');
+    this.scene.start('Title');
   }
 }

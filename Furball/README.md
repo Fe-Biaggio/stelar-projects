@@ -17,7 +17,23 @@ npm run dev
 ```
 
 Abra o endereço que aparecer (normalmente http://localhost:5173).
-O jogo abre na seleção de personagem: Preto (principal), Laranja, Siamês, Tricolor ou Frajola.
+O jogo abre numa tela com dois modos e depois na seleção de personagem (Preto, o principal,
+Laranja, Siamês, Tricolor ou Frajola):
+
+- **Modo desenvolvedor** – a sala de testes: todos os itens e coletáveis no chão, gato de
+  teste, painel de status e chances do baú, números de dano e botões para repor itens.
+- **Jogar** – o jogo para valer: cada nível é um mapa gerado aleatoriamente (9 salas no
+  nível 1, mais 2 a cada nível, até 15), com salas de inimigos, tesouro, loja trancada e o boss
+  na sala mais distante. Ao entrar numa sala com inimigos, as portas fecham até você vencer;
+  cada sala limpa pode soltar moeda, coração, chave ou bomba. O minimapa no canto mostra as
+  salas visitadas e os ícones de tesouro (amarelo), loja (verde) e boss (vermelho). Derrotar
+  o boss deixa um item, um coração e um alçapão para o próximo nível (mapa novo; a chave
+  dourada é perdida). Começa com 1 bomba e 1 chave.
+
+Inimigos (ficam mais fortes a cada nível): mosca (voa em sua direção), aranha (pulos rápidos),
+bolota vermelha (atira nas 4 direções), cabeça pálida (persegue) e o boss Morcegão (anéis de
+tiros e investidas; com metade da vida fica mais rápido). Qualquer inimigo tira 1 de vida
+(meio coração) por contato ou tiro. Depois de levar dano, o gato fica 1 segundo invulnerável.
 
 Controles: **WASD** para andar, **setas** para cuspir bolas de pelo, **E** para colocar bomba. O botão **Início**
 (canto superior direito) ou **Esc** volta à seleção a qualquer momento. Depois de perder,
@@ -137,9 +153,9 @@ Furball/
 │   ├── shop.ts          # itens e preços da loja
 │   ├── stats.ts         # status do gato (multiplicadores)
 │   ├── objects/         # jogador, inimigos, projéteis...
-│   ├── scenes/          # carregamento, seleção de personagem, sala
+│   ├── scenes/          # carregamento, tela inicial, seleção de personagem, sala
 │   ├── ui/              # controles de toque
-│   └── world/           # desenho da sala, explosão e empurrão
+│   └── world/           # mapa do nível (floor.ts), desenho da sala, explosão e empurrão
 └── tools/               # scripts para recortar sprites das folhas
 ```
 
@@ -147,7 +163,8 @@ Em `npm run dev`, um POST em `/__screenshot` com `{ name, data }` (PNG em data U
 um print do jogo em `screenshots/` (fora do git), para enviar capturas durante o desenvolvimento.
 
 Para regerar os sprites a partir das folhas: `python tools/extract_cats.py`,
-`python tools/extract_ui.py`, `python tools/extract_items.py` e `python tools/extract_pickups.py`.
+`python tools/extract_ui.py`, `python tools/extract_items.py`, `python tools/extract_pickups.py`
+e `python tools/extract_enemies.py`.
 
 ## Núcleo do jogo (MVP)
 

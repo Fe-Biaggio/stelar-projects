@@ -156,3 +156,34 @@ export function drawLockedDoor(scene: Phaser.Scene, side: DoorSide) {
   g.fillTriangle(c.x - 2, c.y + 3, c.x + 2, c.y + 3, c.x, c.y + 10);
   return g;
 }
+
+/** Grade de ferro que fecha uma porta aberta enquanto há inimigos na sala. */
+export function drawDoorBars(scene: Phaser.Scene, side: DoorSide) {
+  const g = scene.add.graphics().setDepth(-89);
+  const pts = doorPoints(side);
+  g.fillStyle(0x000000, 0.35).fillPoints(pts(OPENING), true);
+  for (const px of [-24, -12, 0, 12, 24]) {
+    const [a, b] = pts([[px, -12], [px, 32]]);
+    g.lineStyle(5, 0x1a1614).lineBetween(a.x, a.y, b.x, b.y);
+    g.lineStyle(2, 0x8a847e).lineBetween(a.x - 1, a.y, b.x - 1, b.y);
+  }
+  for (const py of [0, 20]) {
+    const [a, b] = pts([[-34, py], [34, py]]);
+    g.lineStyle(5, 0x1a1614).lineBetween(a.x, a.y, b.x, b.y);
+    g.lineStyle(2, 0x6a645e).lineBetween(a.x, a.y - 1, b.x, b.y - 1);
+  }
+  return g;
+}
+
+/** Alçapão no chão que leva ao próximo nível. */
+export function drawTrapdoor(scene: Phaser.Scene, x: number, y: number) {
+  const g = scene.add.graphics().setDepth(-55);
+  g.fillStyle(0x000000, 0.35).fillRoundedRect(x - 40, y - 26, 84, 58, 8);
+  g.fillStyle(0x3a2616).fillRoundedRect(x - 42, y - 30, 84, 58, 8);
+  g.fillStyle(0x050302).fillRoundedRect(x - 34, y - 22, 68, 42, 6);
+  g.fillStyle(0x1a110a).fillRect(x - 30, y - 18, 60, 8);
+  g.lineStyle(3, 0x1a0f08).strokeRoundedRect(x - 42, y - 30, 84, 58, 8);
+  // Degraus descendo
+  g.fillStyle(0x2a1a10).fillRect(x - 26, y - 6, 52, 5).fillRect(x - 22, y + 4, 44, 4);
+  return g;
+}

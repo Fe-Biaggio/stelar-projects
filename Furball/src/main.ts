@@ -3,6 +3,7 @@ import { GAME_HEIGHT, GAME_WIDTH } from './config';
 import { PreloadScene } from './scenes/PreloadScene';
 import { RoomScene } from './scenes/RoomScene';
 import { SelectScene } from './scenes/SelectScene';
+import { TitleScene } from './scenes/TitleScene';
 
 // Abra com ?debug na URL para ver as caixas de colisão.
 const debug = new URLSearchParams(window.location.search).has('debug');
@@ -21,7 +22,7 @@ const game = new Phaser.Game({
     default: 'arcade',
     arcade: { debug },
   },
-  scene: [PreloadScene, SelectScene, RoomScene],
+  scene: [PreloadScene, TitleScene, SelectScene, RoomScene],
 });
 
 // Em desenvolvimento, deixa o jogo acessível pelo console do navegador (window.furball).

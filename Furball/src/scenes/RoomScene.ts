@@ -4,6 +4,7 @@ import { CatId, PLAYABLE } from '../cats';
 import { ITEMS, ItemId, randomItemOf } from '../items';
 import { Bomb } from '../objects/Bomb';
 import { Chest } from '../objects/Chest';
+import { ENEMY_NAMES, Enemy, EnemyKind, EnemyShot } from '../objects/Enemy';
 import { DummyCat } from '../objects/DummyCat';
 import { Furball, createFurballTexture } from '../objects/Furball';
 import { ItemPickup, ItemSpawn } from '../objects/ItemPickup';
@@ -12,12 +13,13 @@ import { Vendor } from '../objects/Vendor';
 import { Facing, Player } from '../objects/Player';
 import { HEART_POINTS, PICKUP_FRAME, PickupKind, addPickup, isHeart, useKey } from '../pickups';
 import { RARITY_INFO, RARITY_ORDER, rarityOdds, rollRarity } from '../rarity';
-import { RoomId, RoomState, Run, newRun } from '../run';
+import { GameMode, RoomId, RoomState, Run, newRun, startNextLevel } from '../run';
 import { STAT_LABELS, Stats, formatMult } from '../stats';
 import { TouchControls, isTouchDevice } from '../ui/TouchControls';
 import { drawScorch, playExplosion } from '../world/explosion';
 import { priceOf, rollShopItems } from '../shop';
-import { DoorSide, drawLockedDoor, drawRoom } from '../world/room';
+import { RoomDef, doorKey, neighbors } from '../world/floor';
+import { DoorSide, drawDoorBars, drawLockedDoor, drawRoom, drawTrapdoor } from '../world/room';
 
 type MoveKeys = Record<'w' | 'a' | 's' | 'd', Phaser.Input.Keyboard.Key>;
 type AimKeys = Record<Facing, Phaser.Input.Keyboard.Key>;
@@ -57,21 +59,33 @@ const KNOCK_RADIUS = 220;
 const KNOCK_MAX = 260; // distância que algo colado na bomba é lançado
 const BOMB_DAMAGE_PLAYER = 2; // 1 coração
 const BOMB_DAMAGE_ENEMY = 10;
+/** Dano de qualquer inimigo (contato ou tiro): 1 = meio coração. */
+const ENEMY_DAMAGE = 1;
 
 // Corações no HUD: quantos por linha e o espaçamento.
 const HEARTS_PER_ROW = 8;
 const HEART_GAP = 34;
 const HEART_ROW_H = 30;
 
-/** Portas abertas de cada sala e para onde levam. */
-const DOORS: Record<RoomId, Partial<Record<DoorSide, RoomId>>> = {
-  start: { right: 'treasure', up: 'shop' },
-  treasure: { left: 'start' },
-  shop: { down: 'start' },
-};
+// Recompensa ao limpar uma sala comum (peso de cada coletável; "none" = nada).
+const CLEAR_DROPS: [PickupKind | 'none', number][] = [
+  ['coin', 34],
+  ['heart', 12],
+  ['halfHeart', 10],
+  ['key', 12],
+  ['bomb', 12],
+  ['blueHeart', 4],
+  ['goldenKey', 2],
+  ['none', 14],
+];
 
-/** Portas que começam trancadas (precisam de uma chave), como "sala:lado". */
-const LOCKED_DOORS = ['start:up'];
+// Tipos de inimigo das salas comuns (peso de cada um).
+const ENEMY_POOL: [EnemyKind, number][] = [
+  ['fly', 3],
+  ['spider', 3],
+  ['blob', 2],
+  ['pale', 2],
+];
 
 // Itens da loja: posição na frente da bancada.
 const SHOP_ITEM_Y = 330;
@@ -91,16 +105,34 @@ const DROP_SPOTS: [number, number][] = [
 
 interface RoomData {
   cat?: CatId;
+  mode?: GameMode;
   run?: Run;
   room?: RoomId;
   /** Porta por onde o gato entrou. */
   enterFrom?: DoorSide;
+  /** Acabou de descer para um nível novo (mostra "Nível N"). */
+  newLevel?: boolean;
+}
+
+function weightedPick<T>(list: [T, number][]): T {
+  let r = Math.random() * list.reduce((sum, [, w]) => sum + w, 0);
+  for (const [v, w] of list) {
+    if ((r -= w) < 0) return v;
+  }
+  return list[list.length - 1][0];
 }
 
 export class RoomScene extends Phaser.Scene {
   private run!: Run;
-  private roomId: RoomId = 'start';
+  private roomId: RoomId = '0,0';
   private enterFrom?: DoorSide;
+  private newLevel = false;
+  private enemies: Enemy[] = [];
+  private enemyShots: EnemyShot[] = [];
+  /** Grades nas portas enquanto há inimigos. */
+  private bars = new Map<DoorSide, Phaser.GameObjects.Graphics>();
+  private trapdoor?: { x: number; y: number };
+  private bossBar?: { fill: Phaser.GameObjects.Rectangle; boss: Enemy; parts: Phaser.GameObjects.GameObject[] };
   private player!: Player;
   private dummy?: DummyCat;
   private chest?: Chest;
@@ -142,11 +174,30 @@ export class RoomScene extends Phaser.Scene {
     return (this.run.rooms[this.roomId] ??= { items: [], pickups: [] });
   }
 
+  private get roomDef(): RoomDef {
+    return this.run.floor.rooms[this.roomId];
+  }
+
+  private get isDev() {
+    return this.run.mode === 'dev';
+  }
+
+  /** Salas vizinhas desta sala, por lado da porta. */
+  private get doors() {
+    return neighbors(this.run.floor, this.roomId);
+  }
+
+  /** Ainda há inimigos vivos (as portas ficam fechadas). */
+  private get inCombat() {
+    return this.enemies.some((e) => !e.dead);
+  }
+
   /** Sem `run`, começa uma partida nova (vinda da seleção ou do R). */
   init(data: RoomData) {
-    this.run = data.run ?? newRun(data.cat ?? 'black');
-    this.roomId = data.room ?? 'start';
+    this.run = data.run ?? newRun(data.cat ?? 'black', data.mode ?? 'dev');
+    this.roomId = data.room ?? this.run.floor.startId;
     this.enterFrom = data.enterFrom;
+    this.newLevel = !!data.newLevel;
   }
 
   create() {
@@ -161,26 +212,34 @@ export class RoomScene extends Phaser.Scene {
     this.chest = undefined;
     this.bombs = [];
     this.vendor = undefined;
+    this.enemies = [];
+    this.enemyShots = [];
+    this.bars.clear();
+    this.trapdoor = undefined;
+    this.bossBar = undefined;
     this.locks.clear();
     this.nagUntil = 0;
     this.doorPauseUntil = 0;
     createFurballTexture(this, this.cat);
-    drawRoom(this, Object.keys(DOORS[this.roomId]) as DoorSide[]);
+    drawRoom(this, Object.keys(this.doors) as DoorSide[]);
     this.physics.world.setBounds(FLOOR.x, FLOOR.y, FLOOR.width, FLOOR.height);
 
-    for (const side of Object.keys(DOORS[this.roomId]) as DoorSide[]) {
+    for (const side of Object.keys(this.doors) as DoorSide[]) {
       if (this.isLocked(side)) this.locks.set(side, drawLockedDoor(this, side));
     }
 
     const firstVisit = !this.run.rooms[this.roomId];
     for (const sc of this.roomState.scorches ?? []) drawScorch(this, sc.x, sc.y, sc.seed);
-    if (this.roomId === 'start') {
+    const type = this.roomDef.type;
+    if (type === 'devStart') {
       this.drawSpikes();
       // Gato de teste parado no meio da sala.
       this.dummy = new DummyCat(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 12, 'gray');
-    } else if (this.roomId === 'treasure') {
+    } else if (type === 'treasure') {
       this.chest = new Chest(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 20, !!this.roomState.chestOpen);
-    } else if (this.roomId === 'shop') {
+    } else if (type === 'boss' && this.roomState.cleared) {
+      this.placeTrapdoor(false);
+    } else if (type === 'shop') {
       // O vendedor é um gato diferente do que você escolheu
       const vendorCat = PLAYABLE.find((c) => c !== this.cat && c !== 'black') ?? 'orange';
       this.vendor = new Vendor(this, GAME_WIDTH / 2, FLOOR.y + 120, vendorCat);
@@ -191,7 +250,7 @@ export class RoomScene extends Phaser.Scene {
       this.items.push(new ItemPickup(this, it.x, it.y, it.id, { kind: 'none' }, it.price));
     }
     for (const p of this.roomState.pickups) this.pickups.push(new Pickup(this, p.x, p.y, p.kind, false, p.tag));
-    if (firstVisit && this.roomId === 'start') this.respawnItems(false);
+    if (firstVisit && type === 'devStart') this.respawnItems(false);
 
     const spawn = this.spawnPoint();
     this.player = new Player(this, spawn.x, spawn.y, this.cat, this.run.stats, this.run.hp, this.run.shield, spawn.facing);
@@ -201,6 +260,9 @@ export class RoomScene extends Phaser.Scene {
     this.player.on('hp', () => this.updateHearts(true));
     this.player.on('stats', (stats: Stats) => this.updateStats(stats));
     this.player.on('dead', () => this.showGameOver());
+
+    // Salas com inimigos: fecha as portas até limpar
+    if ((type === 'normal' || type === 'boss') && !this.roomState.cleared) this.spawnEnemies(spawn);
 
     const kb = this.input.keyboard!;
     const K = Phaser.Input.Keyboard.KeyCodes;
@@ -213,7 +275,10 @@ export class RoomScene extends Phaser.Scene {
 
     this.createHud();
 
-    if (!this.enterFrom) {
+    if (this.newLevel) {
+      this.time.delayedCall(250, () => this.showBanner(`Nível ${this.run.level}`, 'Um novo porão…', '#f2c879'));
+    }
+    if (!this.enterFrom && !this.newLevel) {
       this.hint = this.add
         .text(GAME_WIDTH / 2, GAME_HEIGHT - WALL - 28, this.touch ? 'Esquerda: andar  ·  direita: atirar e bomba' : 'WASD andar  ·  setas atirar  ·  E bomba', {
           fontFamily: 'monospace',
@@ -282,21 +347,160 @@ export class RoomScene extends Phaser.Scene {
         this.dummy.takeHit(d.x, d.y, f.damage);
         if (this.showDamage) this.showDamageNumber(this.dummy.x, this.dummy.y - 70, f.damage);
       }
+      for (const e of this.enemies) {
+        if (f.dead || !e.hits(x, y, f.hitRadius)) continue;
+        const d = f.direction;
+        f.burst();
+        e.takeHit(d.x, d.y, f.damage);
+        if (this.showDamage) this.showDamageNumber(e.x, e.y - 50, f.damage);
+      }
     }
     this.dummy?.update(time);
     this.vendor?.update(time);
+    this.updateEnemies(dt, time);
     this.furballs = this.furballs.filter((f) => !f.dead);
 
     this.checkSpikes();
     this.checkItems(time);
     this.checkPickups(time);
     this.updateBombs(dt, time);
+    this.checkTrapdoor();
     this.checkDoors();
+  }
+
+  // ---------- Inimigos ----------
+
+  /** Coloca os inimigos longe de onde o gato entrou e fecha as portas. */
+  private spawnEnemies(from: { x: number; y: number }) {
+    const level = this.run.level;
+    if (this.roomDef.type === 'boss') {
+      const boss = new Enemy(this, GAME_WIDTH / 2, FLOOR.y + 150, 'boss', level);
+      this.enemies.push(boss);
+      this.createBossBar(boss);
+    } else {
+      const count = Math.min(2 + Math.floor(Math.random() * 3) + Math.floor((level - 1) / 2), 6);
+      const placed: { x: number; y: number }[] = [];
+      for (let i = 0; i < count; i++) {
+        let x = 0;
+        let y = 0;
+        for (let tries = 0; tries < 40; tries++) {
+          x = Phaser.Math.Between(FLOOR.x + 70, FLOOR.x + FLOOR.width - 70);
+          y = Phaser.Math.Between(FLOOR.y + 70, FLOOR.y + FLOOR.height - 50);
+          const farFromCat = Phaser.Math.Distance.Between(x, y, from.x, from.y) > 260;
+          const apart = placed.every((p) => Phaser.Math.Distance.Between(x, y, p.x, p.y) > 80);
+          if (farFromCat && apart) break;
+        }
+        placed.push({ x, y });
+        this.enemies.push(new Enemy(this, x, y, weightedPick(ENEMY_POOL), level));
+      }
+    }
+    for (const side of Object.keys(this.doors) as DoorSide[]) {
+      if (!this.isLocked(side)) this.bars.set(side, drawDoorBars(this, side));
+    }
+  }
+
+  private updateEnemies(dt: number, time: number) {
+    if (!this.enemies.length) return;
+    const feet = this.player.feet;
+    const world = {
+      target: feet,
+      shoot: (x: number, y: number, vx: number, vy: number) => this.enemyShots.push(new EnemyShot(this, x, y, vx, vy)),
+    };
+    for (const e of this.enemies) {
+      e.update(dt, time, world);
+      // Encostar em qualquer inimigo (boss incluído) tira 1 de vida: meio coração
+      if (!e.dead && !e.spawning && !this.player.dead) {
+        if (Phaser.Math.Distance.Between(feet.x, feet.y - 8, e.x, e.body.center.y) < e.radius + 14) {
+          this.player.takeDamage(ENEMY_DAMAGE, e.x, e.y);
+        }
+      }
+    }
+    for (const shot of this.enemyShots) {
+      shot.update(dt);
+      if (!shot.dead && !this.player.dead && Phaser.Math.Distance.Between(shot.x, shot.y, feet.x, feet.y) < 20) {
+        shot.burst();
+        this.player.takeDamage(ENEMY_DAMAGE, shot.x, shot.y);
+      }
+    }
+    this.enemyShots = this.enemyShots.filter((s) => !s.dead);
+    if (this.bossBar) {
+      const { boss, fill } = this.bossBar;
+      fill.width = 396 * Math.max(boss.hp, 0) / boss.maxHp;
+    }
+
+    const wasFighting = this.enemies.length > 0;
+    this.enemies = this.enemies.filter((e) => !e.dead);
+    if (wasFighting && !this.enemies.length) this.onRoomCleared();
+  }
+
+  /** Sala limpa: abre as portas e dá uma recompensa (no boss, o alçapão para o próximo nível). */
+  private onRoomCleared() {
+    this.roomState.cleared = true;
+    for (const shot of this.enemyShots) shot.burst();
+    this.enemyShots = [];
+    for (const [side, g] of this.bars) {
+      this.tweens.add({ targets: g, alpha: 0, duration: 300, onComplete: () => g.destroy() });
+      this.bars.delete(side);
+    }
+    const cx = GAME_WIDTH / 2;
+    const cy = GAME_HEIGHT / 2 + 30;
+    if (this.roomDef.type === 'boss') {
+      this.bossBar?.parts.forEach((p) => p.destroy());
+      this.bossBar = undefined;
+      this.showBanner(`${ENEMY_NAMES.boss} derrotado!`, 'Desça pelo alçapão para o próximo nível', '#f2c879');
+      this.placeTrapdoor(true);
+      // Prêmio do boss: um item (a sorte ajuda) e um coração
+      const id = randomItemOf(rollRarity(this.run.stats.luck));
+      this.items.push(new ItemPickup(this, cx - 110, cy + 40, id, { kind: 'toss', fromX: cx, fromY: FLOOR.y + 120 }));
+      this.pickups.push(new Pickup(this, cx + 110, cy + 40, 'heart', true));
+      return;
+    }
+    const drop = weightedPick(CLEAR_DROPS);
+    if (drop !== 'none') this.pickups.push(new Pickup(this, cx, cy, drop, true));
+  }
+
+  /** Barra de vida do boss, embaixo da tela. */
+  private createBossBar(boss: Enemy) {
+    const x = GAME_WIDTH / 2;
+    const y = GAME_HEIGHT - 26;
+    const bg = this.add.rectangle(x, y, 404, 18, 0x120a0a, 0.85).setStrokeStyle(2, 0x3a1a1a).setDepth(39_000);
+    const fill = this.add.rectangle(x - 198, y, 396, 10, 0xc8302a).setOrigin(0, 0.5).setDepth(39_001);
+    const name = this.add
+      .text(x, y - 20, ENEMY_NAMES.boss, { fontFamily: 'monospace', fontSize: '14px', color: '#e8d9c4', stroke: '#1a1210', strokeThickness: 4 })
+      .setOrigin(0.5)
+      .setDepth(39_001);
+    this.bossBar = { fill, boss, parts: [bg, fill, name] };
+  }
+
+  private placeTrapdoor(animate: boolean) {
+    const x = GAME_WIDTH / 2;
+    const y = GAME_HEIGHT / 2 - 10;
+    const g = drawTrapdoor(this, x, y);
+    if (animate) {
+      g.setAlpha(0);
+      this.tweens.add({ targets: g, alpha: 1, duration: 600 });
+    }
+    this.trapdoor = { x, y };
+  }
+
+  /** Pisar no alçapão leva ao próximo nível (mapa novo; a chave dourada é perdida). */
+  private checkTrapdoor() {
+    if (!this.trapdoor || this.leaving || this.player.dead) return;
+    const feet = this.player.feet;
+    if (Phaser.Math.Distance.Between(feet.x, feet.y, this.trapdoor.x, this.trapdoor.y) > 30) return;
+    this.leaving = true;
+    this.saveRoom();
+    startNextLevel(this.run);
+    this.cameras.main.fadeOut(400);
+    this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
+      const data: RoomData = { run: this.run, room: this.run.floor.startId, newLevel: true };
+      this.scene.restart(data);
+    });
   }
 
   /** Se o gato está empurrando uma porta aberta, vai para a sala do outro lado. */
   private checkDoors() {
-    if (this.player.dead) return;
+    if (this.player.dead || this.inCombat) return;
     const b = this.player.body;
     const feet = this.player.feet;
     const midY = Math.abs(feet.y - 10 - GAME_HEIGHT / 2) < 30;
@@ -307,7 +511,7 @@ export class RoomScene extends Phaser.Scene {
       up: midX && this.move.y < 0 && b.top <= FLOOR.y + 1,
       down: midX && this.move.y > 0 && b.bottom >= FLOOR.y + FLOOR.height - 1,
     };
-    for (const [side, target] of Object.entries(DOORS[this.roomId]) as [DoorSide, RoomId][]) {
+    for (const [side, target] of Object.entries(this.doors) as [DoorSide, RoomId][]) {
       if (!pushing[side] || this.time.now < this.doorPauseUntil) continue;
       if (this.isLocked(side)) this.tryUnlock(side);
       else this.goToRoom(target, OPPOSITE[side]);
@@ -315,13 +519,12 @@ export class RoomScene extends Phaser.Scene {
     }
   }
 
-  /** A porta está trancada? (as duas salas ligadas pela porta compartilham o estado) */
+  /** A porta está trancada? Fica trancada se uma das duas salas é trancada (ex.: a loja). */
   private isLocked(side: DoorSide) {
-    const here = `${this.roomId}:${side}`;
-    const target = DOORS[this.roomId][side];
-    const there = target ? `${target}:${OPPOSITE[side]}` : '';
-    const locked = LOCKED_DOORS.includes(here) || LOCKED_DOORS.includes(there);
-    return locked && !this.run.unlocked.includes(here) && !this.run.unlocked.includes(there);
+    const target = this.doors[side];
+    if (!target) return false;
+    const locked = this.roomDef.locked || this.run.floor.rooms[target].locked;
+    return !!locked && !this.run.unlocked.includes(doorKey(this.roomId, target));
   }
 
   /** Gasta uma chave (ou usa a dourada) para destrancar a porta. */
@@ -334,7 +537,7 @@ export class RoomScene extends Phaser.Scene {
       this.cameras.main.shake(80, 0.003);
       return;
     }
-    this.run.unlocked.push(`${this.roomId}:${side}`);
+    this.run.unlocked.push(doorKey(this.roomId, this.doors[side]!));
     this.updateCounters(usedGolden ? undefined : 'key');
     // O cadeado cai e a porta some
     const lock = this.locks.get(side);
@@ -492,6 +695,12 @@ export class RoomScene extends Phaser.Scene {
     if (Phaser.Math.Distance.Between(x, y, feet.x, feet.y) < BLAST_RADIUS) {
       this.player.takeDamage(BOMB_DAMAGE_PLAYER, x, y);
     }
+    for (const e of this.enemies) {
+      if (e.dead || Phaser.Math.Distance.Between(x, y, e.x, e.y) > BLAST_RADIUS + e.radius) continue;
+      const a = Math.atan2(e.y - y, e.x - x);
+      e.takeHit(Math.cos(a), Math.sin(a), BOMB_DAMAGE_ENEMY);
+      if (this.showDamage) this.showDamageNumber(e.x, e.y - 50, BOMB_DAMAGE_ENEMY);
+    }
     if (this.dummy?.alive && Phaser.Math.Distance.Between(x, y, this.dummy.x, this.dummy.y) < BLAST_RADIUS + 20) {
       const a = Math.atan2(this.dummy.y - y, this.dummy.x - x);
       this.dummy.takeHit(Math.cos(a), Math.sin(a), BOMB_DAMAGE_ENEMY);
@@ -595,7 +804,8 @@ export class RoomScene extends Phaser.Scene {
     this.createCounters();
     this.updateHearts(false);
     this.createTopButtons();
-    this.createStatsPanel();
+    if (this.isDev) this.createStatsPanel();
+    else this.createMinimap();
   }
 
   /** Contadores de moedas, bombas e chaves embaixo dos corações (como no Isaac). */
@@ -804,7 +1014,9 @@ export class RoomScene extends Phaser.Scene {
   private createTopButtons() {
     const y = 31;
     this.makeButton(GAME_WIDTH - 20 - 66, y, 132, '↺ Início (Esc)', () => this.backToSelect());
-    const refill = this.roomId === 'treasure' ? '+ Novo baú' : this.roomId === 'shop' ? '+ Repor loja' : '+ Repor itens';
+    if (!this.isDev) return; // os botões de teste só existem no modo desenvolvedor
+    const type = this.roomDef.type;
+    const refill = type === 'treasure' ? '+ Novo baú' : type === 'shop' ? '+ Repor loja' : '+ Repor itens';
     this.makeButton(GAME_WIDTH - 162 - 56, y, 112, refill, () => this.respawnItems());
     const damageButton = this.makeButton(GAME_WIDTH - 284 - 58, y, 116, '', () => {
       this.registry.set('showDamage', !this.showDamage);
@@ -814,7 +1026,49 @@ export class RoomScene extends Phaser.Scene {
   }
 
   private get showDamage(): boolean {
-    return this.registry.get('showDamage') ?? true;
+    return this.isDev && (this.registry.get('showDamage') ?? true);
+  }
+
+  /**
+   * Minimapa no canto superior direito (modo jogo): salas visitadas, vizinhas já vistas e os
+   * ícones do tesouro, da loja e do boss.
+   */
+  private createMinimap() {
+    const floor = this.run.floor;
+    const visited = new Set(Object.keys(this.run.rooms));
+    visited.add(this.roomId);
+    const known = new Set(visited);
+    for (const id of visited) for (const n of Object.values(neighbors(floor, id))) known.add(n!);
+    const rooms = [...known].map((id) => floor.rooms[id]);
+    const minX = Math.min(...rooms.map((r) => r.gx));
+    const maxX = Math.max(...rooms.map((r) => r.gx));
+    const minY = Math.min(...rooms.map((r) => r.gy));
+    const maxY = Math.max(...rooms.map((r) => r.gy));
+    const cw = 22;
+    const ch = 15;
+    const gap = 4;
+    const w = (maxX - minX + 1) * (cw + gap) + gap;
+    const h = (maxY - minY + 1) * (ch + gap) + gap;
+    const right = GAME_WIDTH - 20;
+    const top = 58;
+    const left = right - Math.max(w, 90);
+    const depth = 40_000;
+    this.add.rectangle(left - 6, top - 6, Math.max(w, 90) + 12, h + 30, 0x0c0907, 0.75).setOrigin(0, 0).setDepth(depth);
+    const g = this.add.graphics().setDepth(depth + 1);
+    for (const r of rooms) {
+      const x = left + gap + (r.gx - minX) * (cw + gap);
+      const y = top + gap + (r.gy - minY) * (ch + gap);
+      const color = r.id === this.roomId ? 0xf2e6cf : visited.has(r.id) ? 0x8a7a6a : 0x3a322e;
+      g.fillStyle(color).fillRoundedRect(x, y, cw, ch, 3);
+      const icon = r.type === 'treasure' ? 0xe2b13c : r.type === 'shop' ? 0x7ad67a : r.type === 'boss' ? 0xd8302a : 0;
+      if (icon) {
+        g.fillStyle(0x0c0907).fillCircle(x + cw / 2, y + ch / 2, 5);
+        g.fillStyle(icon).fillCircle(x + cw / 2, y + ch / 2, 4);
+      }
+    }
+    this.add
+      .text(left, top + h + 4, `Nível ${this.run.level}`, { fontFamily: 'monospace', fontSize: '12px', color: '#b8a898' })
+      .setDepth(depth + 1);
   }
 
   private damageLabel() {
@@ -851,7 +1105,7 @@ export class RoomScene extends Phaser.Scene {
     this.leaving = true;
     this.cameras.main.fadeOut(200);
     this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () =>
-      this.scene.start('Select', { cat: this.cat }),
+      this.scene.start('Select', { cat: this.cat, mode: this.run.mode }),
     );
   }
 
@@ -927,11 +1181,12 @@ export class RoomScene extends Phaser.Scene {
     this.tweens.add({ targets: [title, sub], alpha: 1, duration: 600, delay: 600 });
 
     const kb = this.input.keyboard!;
-    kb.once('keydown-R', () => this.scene.restart({ cat: this.cat }));
+    const restart: RoomData = { cat: this.cat, mode: this.run.mode };
+    kb.once('keydown-R', () => this.scene.restart(restart));
     // No celular: tocar na tela recomeça (o botão Início continua levando à seleção)
     this.time.delayedCall(900, () => {
       overlay.setInteractive();
-      overlay.once('pointerdown', () => this.scene.restart({ cat: this.cat }));
+      overlay.once('pointerdown', () => this.scene.restart(restart));
     });
   }
 

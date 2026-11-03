@@ -2,10 +2,15 @@ import { CatId } from './cats';
 import { ItemId } from './items';
 import { Inventory, PickupKind, newInventory } from './pickups';
 import { HP_PER_HEART, Stats, newStats } from './stats';
+import { FloorMap, devFloor, generateFloor } from './world/floor';
 
 // Estado de uma partida: o que precisa sobreviver quando o gato troca de sala.
 
-export type RoomId = 'start' | 'treasure' | 'shop';
+/** "dev": sala de testes com painéis; "game": mapa aleatório com inimigos e boss. */
+export type GameMode = 'dev' | 'game';
+
+/** Identificador de uma sala no mapa ("x,y" na grade). */
+export type RoomId = string;
 
 export interface FloorItem {
   id: ItemId;
@@ -38,9 +43,12 @@ export interface RoomState {
   scorches?: Scorch[];
   /** Só na sala do tesouro. */
   chestOpen?: boolean;
+  /** Inimigos já derrotados (as portas ficam abertas). */
+  cleared?: boolean;
 }
 
 export interface Run {
+  mode: GameMode;
   cat: CatId;
   stats: Stats;
   /** Vida vermelha, em pontos (2 por coração). */
@@ -50,20 +58,31 @@ export interface Run {
   inventory: Inventory;
   /** Nível (andar) atual. A chave dourada só vale no nível em que foi pega. */
   level: number;
-  /** Portas trancadas que já foram abertas neste nível, como "start:up". */
+  /** Mapa do nível atual. */
+  floor: FloorMap;
+  /** Portas trancadas já abertas neste nível (ver doorKey em world/floor.ts). */
   unlocked: string[];
-  rooms: Partial<Record<RoomId, RoomState>>;
+  /** Estado das salas já visitadas neste nível. */
+  rooms: Record<RoomId, RoomState>;
 }
 
-export function newRun(cat: CatId): Run {
+export function newRun(cat: CatId, mode: GameMode = 'dev'): Run {
   const stats = newStats();
+  const inventory = newInventory();
+  if (mode === 'game') {
+    // Como no Isaac, começa com uma bomba; e uma chave para a loja ou o baú.
+    inventory.bombs = 1;
+    inventory.keys = 1;
+  }
   return {
+    mode,
     cat,
     stats,
     hp: stats.maxHp * HP_PER_HEART,
     shield: 0,
-    inventory: newInventory(),
+    inventory,
     level: 1,
+    floor: mode === 'game' ? generateFloor(1) : devFloor(),
     unlocked: [],
     rooms: {},
   };
@@ -78,4 +97,5 @@ export function startNextLevel(run: Run) {
   run.inventory.goldenKey = false;
   run.unlocked = [];
   run.rooms = {};
+  run.floor = generateFloor(run.level);
 }

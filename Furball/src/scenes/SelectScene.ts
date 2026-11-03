@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { CATS, CatId, PLAYABLE } from '../cats';
 import { GAME_HEIGHT, GAME_WIDTH } from '../config';
+import { GameMode } from '../run';
 import { isTouchDevice } from '../ui/TouchControls';
 import { drawRoom } from '../world/room';
 
@@ -23,12 +24,14 @@ export class SelectScene extends Phaser.Scene {
   private nameText!: Phaser.GameObjects.Text;
   private arrow!: Phaser.GameObjects.Triangle;
   private starting = false;
+  private mode: GameMode = 'dev';
 
   constructor() {
     super('Select');
   }
 
-  init(data: { cat?: CatId }) {
+  init(data: { cat?: CatId; mode?: GameMode }) {
+    this.mode = data.mode ?? this.mode;
     this.index = Math.max(0, PLAYABLE.indexOf(data.cat ?? 'black'));
     this.starting = false;
   }
@@ -85,6 +88,19 @@ export class SelectScene extends Phaser.Scene {
     kb.on('keydown-RIGHT', next);
     kb.on('keydown-D', next);
     kb.on('keydown-ENTER', () => this.start());
+    kb.on('keydown-ESC', () => this.scene.start('Title', { mode: this.mode }));
+
+    // Botão para voltar à escolha de modo (no celular não há Esc)
+    const back = this.add
+      .text(28, 24, '‹ Voltar', { fontFamily: 'monospace', fontSize: '18px', color: '#e8d9c4', stroke: '#1a1210', strokeThickness: 4 })
+      .setPadding(8)
+      .setInteractive({ useHandCursor: true });
+    back.on('pointerover', () => back.setColor('#f2c879'));
+    back.on('pointerout', () => back.setColor('#e8d9c4'));
+    back.on('pointerup', () => this.scene.start('Title', { mode: this.mode }));
+    this.add
+      .text(GAME_WIDTH - 28, 34, this.mode === 'dev' ? 'Modo desenvolvedor' : 'Jogar', { fontFamily: 'monospace', fontSize: '14px', color: '#8a7a6a' })
+      .setOrigin(1, 0.5);
     kb.on('keydown-SPACE', () => this.start());
 
     this.select(this.index, true);
@@ -137,7 +153,7 @@ export class SelectScene extends Phaser.Scene {
     this.time.delayedCall(320, () => {
       this.cameras.main.fadeOut(250);
       this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () =>
-        this.scene.start('Room', { cat: chosen.id }),
+        this.scene.start('Room', { cat: chosen.id, mode: this.mode }),
       );
     });
   }
