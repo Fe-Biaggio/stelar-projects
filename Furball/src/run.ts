@@ -46,6 +46,8 @@ export interface RoomState {
   chestOpen?: boolean;
   /** Inimigos já derrotados (as portas ficam abertas). */
   cleared?: boolean;
+  /** Gatinho pedinte/vampiro: quantos itens já deu e se já foi embora. */
+  npc?: { given: number; gone: boolean };
   /** Pedras, buracos e móveis da sala (sorteados na primeira visita). */
   props?: Prop[];
 }
@@ -59,6 +61,10 @@ export interface Run {
   /** Escudo dos corações azuis, em pontos. Não se recupera. */
   shield: number;
   inventory: Inventory;
+  /** Pontos de vida doados ao gatinho vampiro na partida inteira. */
+  bloodDonated: number;
+  /** Já ganhou a capa de vampiro. */
+  vampireReward: boolean;
   /** Item usável carregado (só um por vez) e quanto já recarregou (0 a 1). */
   active?: { id: ItemId; charge: number };
   /** Nível (andar) atual. A chave dourada só vale no nível em que foi pega. */
@@ -93,6 +99,8 @@ export function newRun(cat: CatId, mode: GameMode = 'dev'): Run {
     unlocked: [],
     cracked: [],
     rooms: {},
+    bloodDonated: 0,
+    vampireReward: false,
   };
 }
 

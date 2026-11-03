@@ -3,7 +3,7 @@ import { STAT_STEP, Stats } from './stats';
 
 // Itens coletáveis. O frame é a posição em public/assets/items.png (tools/extract_items.py).
 
-export type ItemId = 'can' | 'catnip' | 'brush' | 'churu' | 'yarn' | 'fish' | 'milk' | 'collar' | 'paw';
+export type ItemId = 'can' | 'catnip' | 'brush' | 'churu' | 'yarn' | 'fish' | 'milk' | 'collar' | 'paw' | 'vampire';
 
 /** Efeito de um item usável (ativado com um botão, por um tempo). */
 export interface ActiveEffect {
@@ -24,7 +24,11 @@ export interface ItemInfo {
   stat?: keyof Stats;
   rarity: Rarity;
   /** Folha de sprites do item ("items" para passivos, "actives" para usáveis). */
-  texture?: 'items' | 'actives';
+  texture?: 'items' | 'actives' | 'vampire';
+  /** Quanto o item soma no status (padrão: STAT_STEP = +0,2x). */
+  amount?: number;
+  /** Não sai em baús, lojas nem drops (recompensa especial). */
+  hidden?: boolean;
   /** Itens usáveis: o que acontece ao apertar o botão. */
   active?: ActiveEffect;
 }
@@ -58,11 +62,23 @@ export const ITEMS: Record<ItemId, ItemInfo> = {
     rarity: 'uncommon',
     active: { effect: 'doubleDamage', duration: 5, recharge: 20 },
   },
+  // Recompensa do gatinho vampiro (doar 3 corações e ficar com meio coração)
+  vampire: {
+    id: 'vampire',
+    name: 'Capa de vampiro',
+    effect: 'Capa + 2 dentinhos: dano +1x',
+    frame: 0,
+    texture: 'vampire',
+    stat: 'damage',
+    amount: 1,
+    rarity: 'epic',
+    hidden: true,
+  },
 };
 
 /** Sorteia um item da raridade pedida. */
 export function randomItemOf(rarity: Rarity, rng: () => number = Math.random): ItemId {
-  const pool = Object.values(ITEMS).filter((i) => i.rarity === rarity);
+  const pool = Object.values(ITEMS).filter((i) => i.rarity === rarity && !i.hidden);
   return pool[Math.floor(rng() * pool.length)].id;
 }
 
@@ -70,5 +86,5 @@ export function randomItemOf(rarity: Rarity, rng: () => number = Math.random): I
 export function applyItem(stats: Stats, item: ItemInfo) {
   if (!item.stat) return; // itens usáveis não mexem nos status
   if (item.stat === 'maxHp') stats.maxHp += 1;
-  else stats[item.stat] = Math.round((stats[item.stat] + STAT_STEP) * 10) / 10;
+  else stats[item.stat] = Math.round((stats[item.stat] + (item.amount ?? STAT_STEP)) * 10) / 10;
 }

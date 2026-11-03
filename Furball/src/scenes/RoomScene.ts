@@ -10,6 +10,7 @@ import { Furball, createFurballTexture } from '../objects/Furball';
 import { ItemPickup, ItemSpawn } from '../objects/ItemPickup';
 import { Pickup } from '../objects/Pickup';
 import { Vendor } from '../objects/Vendor';
+import { Npc } from '../objects/Npc';
 import { Facing, Player } from '../objects/Player';
 import { HEART_POINTS, PICKUP_FRAME, PickupKind, addPickup, isHeart, useKey } from '../pickups';
 import { RARITY_INFO, RARITY_ORDER, rarityOdds, rollRarity } from '../rarity';
@@ -19,7 +20,7 @@ import { TouchControls, isTouchDevice } from '../ui/TouchControls';
 import { drawScorch, playExplosion } from '../world/explosion';
 import { priceOf, rollShopItems } from '../shop';
 import { RoomDef, doorKey, neighbors } from '../world/floor';
-import { DOOR_POS, DoorSide, drawDoorBars, drawDoorCracks, drawLockedDoor, drawRoom, drawTrapdoor } from '../world/room';
+import { DOOR_POS, DoorSide, drawBossDoorMark, drawDoorBars, drawDoorCracks, drawLockedDoor, drawRoom, drawTrapdoor } from '../world/room';
 import {
   Prop,
   blocksWalk,
@@ -69,6 +70,14 @@ const DEV_ACTIVE_ITEMS: [ItemId, number, number][] = [
   ['collar', 4, 4],
   ['paw', 8, 4],
 ];
+// Gatinhos: chance de dar um item a cada moeda / a cada ponto de vida doado.
+const BEGGAR_ITEM_CHANCE = 0.2;
+const VAMPIRE_ITEM_CHANCE = 0.3;
+/** Depois de dar este número de itens, o gatinho vai embora. */
+const NPC_MAX_ITEMS = 2;
+/** Doar este total (3 corações) e ficar com meio coração dá a capa de vampiro. */
+const VAMPIRE_REWARD_BLOOD = 6;
+
 // Bombas para testar na sala de obstáculos (modo desenvolvedor).
 const DEV_PROPS_BOMBS: [number, number][] = [
   [11, 5],
@@ -217,6 +226,8 @@ export class RoomScene extends Phaser.Scene {
   private pickups: Pickup[] = [];
   private bombs: Bomb[] = [];
   private vendor?: Vendor;
+  private npc?: Npc;
+  private npcCooldownUntil = 0;
   private touch?: TouchControls;
   /** Desenhos das portas trancadas desta sala, por lado. */
   private locks = new Map<DoorSide, Phaser.GameObjects.Graphics>();
@@ -303,6 +314,8 @@ export class RoomScene extends Phaser.Scene {
     this.chest = undefined;
     this.bombs = [];
     this.vendor = undefined;
+    this.npc = undefined;
+    this.npcCooldownUntil = 0;
     this.enemies = [];
     this.enemyShots = [];
     this.bars.clear();
@@ -317,6 +330,7 @@ export class RoomScene extends Phaser.Scene {
     this.physics.world.setBounds(FLOOR.x, FLOOR.y, FLOOR.width, FLOOR.height);
 
     for (const side of Object.keys(this.doors) as DoorSide[]) {
+      if (this.run.floor.rooms[this.doors[side]!].type === 'boss') drawBossDoorMark(this, side);
       if (!this.isLocked(side)) continue;
       this.locks.set(side, drawLockedDoor(this, side));
       if (this.run.cracked.includes(doorKey(this.roomId, this.doors[side]!))) this.cracks.set(side, drawDoorCracks(this, side));
@@ -335,6 +349,11 @@ export class RoomScene extends Phaser.Scene {
     } else if (this.roomDef.chest) {
       // Sala comum com baú no meio (madeira abre sem chave; dourado precisa de chave)
       this.chest = new Chest(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 20, !!this.roomState.chestOpen, this.roomDef.chest);
+    } else if (this.roomDef.npc) {
+      // Gatinho pedinte ou vampiro (sala sem inimigos)
+      const state = (this.roomState.npc ??= { given: 0, gone: false });
+      if (!state.gone) this.npc = new Npc(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 20, this.roomDef.npc);
+      if (type === 'devNpc' && (firstVisit || this.devBombsOnRestart)) this.addDevNpcSupplies();
     } else if (type === 'boss' && this.roomState.cleared) {
       this.placeTrapdoor(false);
     } else if (type === 'shop') {
@@ -357,6 +376,7 @@ export class RoomScene extends Phaser.Scene {
     if (this.dummy) this.physics.add.collider(this.player.body, this.dummy.body);
     if (this.chest) this.physics.add.collider(this.player.body, this.chest.body, () => this.tryOpenChest());
     if (this.vendor) this.physics.add.collider(this.player.body, this.vendor.body);
+    if (this.npc) this.physics.add.collider(this.player.body, this.npc.body, () => this.touchNpc());
     this.player.on('hp', () => this.updateHearts(true));
     this.player.on('stats', (stats: Stats) => this.updateStats(stats));
     this.player.loadActive(this.run.active);
@@ -365,7 +385,8 @@ export class RoomScene extends Phaser.Scene {
 
     // Salas com inimigos: fecha as portas até limpar
     this.addPropColliders();
-    if ((type === 'normal' || type === 'boss' || type === 'devProps') && !this.roomState.cleared) this.spawnEnemies(spawn);
+    const peaceful = !!this.roomDef.npc; // sala de gatinho (como a loja) não tem inimigos
+    if ((type === 'normal' || type === 'boss' || type === 'devProps') && !this.roomState.cleared && !peaceful) this.spawnEnemies(spawn);
 
     const kb = this.input.keyboard!;
     const K = Phaser.Input.Keyboard.KeyCodes;
@@ -471,6 +492,7 @@ export class RoomScene extends Phaser.Scene {
     }
     this.dummy?.update(time);
     this.vendor?.update(time);
+    this.npc?.update(time);
     this.updateEnemies(dt, time);
     this.furballs = this.furballs.filter((f) => !f.dead);
 
@@ -918,6 +940,16 @@ export class RoomScene extends Phaser.Scene {
       this.scene.restart({ run: this.run, room: this.roomId } satisfies RoomData);
       return;
     }
+    if (this.roomDef.type === 'devNpc') {
+      // O gatinho volta, e as moedas/corações de teste também
+      this.saveRoom();
+      this.roomState.npc = { given: 0, gone: false };
+      this.roomState.pickups = [];
+      this.devBombsOnRestart = true; // repõe também as moedas/corações de teste
+      this.leaving = true;
+      this.scene.restart({ run: this.run, room: this.roomId } satisfies RoomData);
+      return;
+    }
     if (this.chest) {
       if (this.chest.opened) this.chest.close();
       return;
@@ -1218,6 +1250,71 @@ export class RoomScene extends Phaser.Scene {
     }
   }
 
+  // ---------- Gatinhos pedinte e vampiro ----------
+
+  /** Encostar no gatinho: o pedinte recebe 1 moeda; o vampiro, 1 ponto de vida. */
+  private touchNpc() {
+    const npc = this.npc;
+    if (!npc || npc.gone || this.player.dead || this.time.now < this.npcCooldownUntil) return;
+    this.npcCooldownUntil = this.time.now + 700;
+    const state = (this.roomState.npc ??= { given: 0, gone: false });
+    let chance: number;
+    if (npc.kind === 'beggar') {
+      if (this.run.inventory.coins <= 0) {
+        npc.say('Sem moedinha? Tudo bem…');
+        return;
+      }
+      this.run.inventory.coins -= 1;
+      this.updateCounters('coin');
+      chance = BEGGAR_ITEM_CHANCE;
+    } else {
+      // Não deixa o gato morrer doando: precisa sobrar pelo menos meio coração
+      if (this.player.hp <= 1) {
+        npc.say('Você está fraquinho demais…');
+        return;
+      }
+      this.player.donateBlood(1);
+      this.run.bloodDonated += 1;
+      chance = VAMPIRE_ITEM_CHANCE;
+      this.checkVampireReward();
+    }
+    npc.thank();
+    if (Math.random() >= chance) {
+      npc.say(npc.kind === 'beggar' ? 'Obrigado!' : 'Hmm… delícia.');
+      return;
+    }
+    // Presente: item com as mesmas chances do baú (a sorte ajuda)
+    const id = randomItemOf(rollRarity(this.run.stats.luck));
+    const spot = this.freeDropSpot(npc.x, npc.y);
+    this.items.push(new ItemPickup(this, spot.x, spot.y, id, { kind: 'toss', fromX: npc.x, fromY: npc.y - 40 }));
+    state.given += 1;
+    if (state.given >= NPC_MAX_ITEMS) {
+      state.gone = true;
+      npc.leave(npc.kind === 'beggar' ? 'Valeu! Até mais!' : 'Satisfeito. Adeus!');
+    } else {
+      npc.say('Um presentinho pra você!');
+    }
+  }
+
+  /** Doou 3 corações no total e ficou com meio coração: ganha a capa de vampiro (uma vez). */
+  private checkVampireReward() {
+    if (this.run.vampireReward || this.run.bloodDonated < VAMPIRE_REWARD_BLOOD || this.player.hp !== 1) return;
+    this.run.vampireReward = true;
+    const feet = this.player.feet;
+    const spot = this.freeDropSpot(feet.x, feet.y - 40);
+    this.items.push(new ItemPickup(this, spot.x, spot.y, 'vampire', { kind: 'pop' }));
+    this.showBanner('Presente do vampiro!', 'Uma capa e dois dentinhos', '#c83040');
+  }
+
+  /** Moedas e corações para testar os gatinhos (modo desenvolvedor). */
+  private addDevNpcSupplies() {
+    const kind: PickupKind = this.roomDef.npc === 'beggar' ? 'coin' : 'heart';
+    for (let i = 0; i < 6; i++) {
+      const { x, y } = tileCenter(2 + (i % 3), 1 + Math.floor(i / 3) * 4);
+      this.pickups.push(new Pickup(this, x, y, kind, false));
+    }
+  }
+
   /** Bombas de teste na sala de obstáculos (modo desenvolvedor). */
   private addDevBombs() {
     for (const [col, row] of DEV_PROPS_BOMBS) {
@@ -1372,6 +1469,7 @@ export class RoomScene extends Phaser.Scene {
   }
 
   private updateStats(stats: Stats, flash = true) {
+    if (!this.statTexts.size) return; // o painel só existe no modo desenvolvedor
     for (const [key] of STAT_LABELS) {
       const text = this.statTexts.get(key)!;
       const value = key === 'maxHp' ? `${stats.maxHp}` : formatMult(stats[key]);
@@ -1441,7 +1539,7 @@ export class RoomScene extends Phaser.Scene {
     this.makeButton(GAME_WIDTH - 20 - 66, y, 132, '↺ Início (Esc)', () => this.backToSelect());
     if (!this.isDev) return; // os botões de teste só existem no modo desenvolvedor
     const type = this.roomDef.type;
-    const refill = type === 'treasure' ? '+ Novo baú' : type === 'shop' ? '+ Repor loja' : '+ Repor itens';
+    const refill = type === 'treasure' ? '+ Novo baú' : type === 'shop' ? '+ Repor loja' : type === 'devNpc' ? '+ Repor gatinho' : '+ Repor itens';
     this.makeButton(GAME_WIDTH - 162 - 56, y, 112, refill, () => this.respawnItems());
     const damageButton = this.makeButton(GAME_WIDTH - 284 - 58, y, 116, '', () => {
       this.registry.set('showDamage', !this.showDamage);

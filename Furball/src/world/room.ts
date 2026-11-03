@@ -209,3 +209,23 @@ export function drawDoorCracks(scene: Phaser.Scene, side: DoorSide) {
   g.fillStyle(0x000000, 0.35).fillCircle(c.x + 6, c.y + 4, 9);
   return g;
 }
+
+/** Caveira com chifres em cima da porta que leva à sala do boss. */
+export function drawBossDoorMark(scene: Phaser.Scene, side: DoorSide) {
+  const g = scene.add.graphics().setDepth(-87);
+  const pts = doorPoints(side);
+  // Moldura vermelha na porta
+  g.lineStyle(4, 0xa01818).strokePoints(pts([[-56, 32], [-56, -18], [-40, -32], [40, -32], [56, -18], [56, 32]]), false);
+  const [c] = pts([[0, -24]]);
+  // Chifres
+  g.fillStyle(0x1a0a0a).fillTriangle(c.x - 16, c.y - 2, c.x - 6, c.y - 6, c.x - 20, c.y - 18);
+  g.fillTriangle(c.x + 16, c.y - 2, c.x + 6, c.y - 6, c.x + 20, c.y - 18);
+  g.fillStyle(0xc83030).fillTriangle(c.x - 14, c.y - 3, c.x - 8, c.y - 6, c.x - 18, c.y - 15);
+  g.fillTriangle(c.x + 14, c.y - 3, c.x + 8, c.y - 6, c.x + 18, c.y - 15);
+  // Caveira
+  g.fillStyle(0x1a0a0a).fillCircle(c.x, c.y, 11);
+  g.fillStyle(0xf0e8dc).fillCircle(c.x, c.y, 9);
+  g.fillStyle(0x1a0a0a).fillCircle(c.x - 4, c.y - 1, 3).fillCircle(c.x + 4, c.y - 1, 3);
+  g.fillRect(c.x - 3, c.y + 5, 2, 3).fillRect(c.x + 1, c.y + 5, 2, 3);
+  return g;
+}

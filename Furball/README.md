@@ -165,6 +165,21 @@ livres e todo o chão conectado):
   próxima bomba abre com certeza.
 - Inimigos soltam algo ao morrer: moeda 50%, chave 5%, bomba 5%, item 5%.
 
+### Gatinhos pedinte e vampiro
+
+Cada um tem 30% de chance de aparecer em cada nível (no máximo um de cada por nível; os dois
+podem aparecer juntos), numa sala sem inimigos.
+
+- **Gatinho pedinte** – encostar entrega 1 moeda; cada moeda tem 20% de chance de virar um item
+  (raridade pelas chances do baú). Depois de dar 2 itens, ele vai embora.
+- **Gatinho vampiro** – encostar doa 1 ponto de vida (meio coração; nunca deixa o gato com
+  menos de meio coração); cada doação tem 30% de chance de virar um item. Depois de dar 2
+  itens, ele vai embora.
+- **Capa de vampiro + 2 dentinhos** – quem doar 3 corações no total durante a partida e ficar
+  com meio coração ganha esse item escondido: dano +1x.
+
+A porta que leva à sala do boss tem moldura vermelha, caveira e chifres.
+
 ### Itens usáveis
 
 Um por vez (pegar outro troca, e o antigo fica no chão). Use com Espaço/Q ou o botão na tela;
@@ -180,7 +195,8 @@ depois recarregam. O slot fica embaixo das chaves, com a barra de recarga.
 A partir da sala de testes: **direita** tesouro (baú dourado), **cima** loja (trancada; dá
 para abrir com chave ou bomba), **esquerda** sala de obstáculos (mesa, cadeiras, pedras,
 buracos, baú de madeira, uma mosca, uma cabeça pálida e 3 bombas) e **baixo** sala dos itens
-usáveis (coleira, patinha, gato de teste e espinhos). O botão **+ Repor** de cada sala põe
+usáveis (coleira, patinha, gato de teste e espinhos). Ao lado da sala dos itens usáveis ficam
+o **gatinho pedinte** (esquerda, com 6 moedas) e o **gatinho vampiro** (direita, com 6 corações). O botão **+ Repor** de cada sala põe
 tudo de volta.
 
 ### Jogar no celular

@@ -46,3 +46,20 @@ out.alpha_composite(collar, (0, 0))
 out.alpha_composite(paw_frame, (FS, 0))
 out.save(OUT)
 print("salvo", OUT)
+
+
+# ---------- Capa de vampiro + 2 dentinhos (item passivo escondido): vampire.png 64x64 ----------
+big = Image.new("RGBA", (FS * S, FS * S), (0, 0, 0, 0))
+d = ImageDraw.Draw(big)
+d.polygon([c * S for c in (6, 12, 58, 12, 50, 58, 32, 50, 14, 58)], fill=(26, 10, 14, 255))
+d.polygon([c * S for c in (14, 16, 50, 16, 44, 50, 32, 44, 20, 50)], fill=(150, 18, 34, 255))
+d.polygon([c * S for c in (2, 4, 22, 14, 10, 22)], fill=(26, 10, 14, 255))
+d.polygon([c * S for c in (62, 4, 42, 14, 54, 22)], fill=(26, 10, 14, 255))
+for x in (25, 39):  # dentinhos
+    d.polygon([c * S for c in (x - 5, 22, x + 5, 22, x, 38)], fill=(250, 248, 240, 255))
+alpha = big.getchannel("A").point(lambda a: 255 if a > 0 else 0).filter(ImageFilter.MaxFilter(3 * S * 2 + 1))
+outlined = Image.new("RGBA", big.size, (0, 0, 0, 0))
+outlined.paste(Image.new("RGBA", big.size, (24, 14, 12, 255)), (0, 0), alpha)
+outlined.alpha_composite(big)
+outlined.resize((FS, FS), Image.LANCZOS).save(ROOT / "public/assets/vampire.png")
+print("salvo vampire.png")

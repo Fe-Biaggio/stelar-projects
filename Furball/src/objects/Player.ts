@@ -236,6 +236,14 @@ export class Player extends Phaser.Events.EventEmitter {
     return healed;
   }
 
+  /** Doa vida ao gatinho vampiro: perde pontos sem empurrão nem invulnerabilidade. */
+  donateBlood(points: number) {
+    this.hp = Math.max(1, this.hp - points);
+    this.emitHp();
+    this.sprite.setTintFill(0xc83040);
+    this.scene.time.delayedCall(90, () => this.sprite.clearTint());
+  }
+
   /** Ganha escudo azul. */
   addShield(points: number) {
     this.shield += points;

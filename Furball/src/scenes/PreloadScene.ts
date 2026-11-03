@@ -16,6 +16,7 @@ export class PreloadScene extends Phaser.Scene {
     this.load.spritesheet('hearts', 'assets/hearts.png', { frameWidth: 32, frameHeight: 30 });
     this.load.spritesheet('items', 'assets/items.png', { frameWidth: 64, frameHeight: 64 });
     this.load.spritesheet('actives', 'assets/actives.png', { frameWidth: 64, frameHeight: 64 });
+    this.load.spritesheet('vampire', 'assets/vampire.png', { frameWidth: 64, frameHeight: 64 });
     this.load.spritesheet('pickups', 'assets/pickups.png', { frameWidth: 48, frameHeight: 48 });
     this.load.spritesheet('enemies', 'assets/enemies.png', { frameWidth: 72, frameHeight: 72 });
     for (const b of ['bat', 'rat', 'dog', 'bird', 'human']) this.load.image(`boss_${b}`, `assets/boss_${b}.png`);

@@ -2,7 +2,12 @@ import { DoorSide } from './room';
 
 // Mapa de um nível: salas numa grade, ligadas pelas portas dos lados (como no Isaac).
 
-export type RoomType = 'devStart' | 'devProps' | 'devActives' | 'start' | 'normal' | 'treasure' | 'shop' | 'boss';
+export type RoomType = 'devStart' | 'devProps' | 'devActives' | 'devNpc' | 'start' | 'normal' | 'treasure' | 'shop' | 'boss';
+
+/** Gatinho que pede algo, numa sala sem inimigos. */
+export type NpcKind = 'beggar' | 'vampire';
+/** Chance de cada gatinho aparecer num nível (no máximo 1 de cada por nível). */
+export const NPC_CHANCE = 0.3;
 
 /** Baú numa sala comum: "wood" abre sem chave; "gold" precisa de chave. */
 export type ChestKind = 'wood' | 'gold';
@@ -16,6 +21,8 @@ export interface RoomDef {
   locked?: boolean;
   /** Sala comum com baú no meio. */
   chest?: ChestKind;
+  /** Sala com um gatinho pedinte ou vampiro (sem inimigos). */
+  npc?: NpcKind;
 }
 
 export interface FloorMap {
@@ -54,6 +61,10 @@ export function devFloor(): FloorMap {
   add(0, -1, 'shop', true);
   add(-1, 0, 'devProps');
   add(0, 1, 'devActives');
+  add(-1, 1, 'devNpc');
+  rooms[roomKey(-1, 1)].npc = 'beggar';
+  add(1, 1, 'devNpc');
+  rooms[roomKey(1, 1)].npc = 'vampire';
   rooms[roomKey(-1, 0)].chest = 'wood';
   return { rooms, startId: roomKey(0, 0) };
 }
@@ -119,6 +130,12 @@ export function generateFloor(level: number, rng: () => number = Math.random): F
     for (let i = 0; i < chests; i++) {
       const room = normals.splice(Math.floor(rng() * normals.length), 1)[0];
       room.chest = i === 0 || rng() < 0.5 ? 'wood' : 'gold';
+    }
+    // Gatinhos (30% cada, no máximo um de cada por nível), em salas comuns sem baú
+    for (const kind of ['beggar', 'vampire'] as NpcKind[]) {
+      if (rng() >= NPC_CHANCE) continue;
+      const free = Object.values(rooms).filter((r) => r.type === 'normal' && !r.chest && !r.npc);
+      if (free.length) free[Math.floor(rng() * free.length)].npc = kind;
     }
     return { rooms, startId: roomKey(0, 0) };
   }
