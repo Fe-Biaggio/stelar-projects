@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { FLOOR, GAME_HEIGHT, GAME_WIDTH, TILE, WALL } from '../config';
-import { CatId } from '../cats';
+import { CatId, PLAYABLE } from '../cats';
 import { ITEMS, ItemId, randomItemOf } from '../items';
 import { Bomb } from '../objects/Bomb';
 import { Chest } from '../objects/Chest';
@@ -8,13 +8,15 @@ import { DummyCat } from '../objects/DummyCat';
 import { Furball, createFurballTexture } from '../objects/Furball';
 import { ItemPickup, ItemSpawn } from '../objects/ItemPickup';
 import { Pickup } from '../objects/Pickup';
+import { Vendor } from '../objects/Vendor';
 import { Facing, Player } from '../objects/Player';
-import { HEART_POINTS, PICKUP_FRAME, PickupKind, addPickup, isHeart } from '../pickups';
+import { HEART_POINTS, PICKUP_FRAME, PickupKind, addPickup, isHeart, useKey } from '../pickups';
 import { RARITY_INFO, RARITY_ORDER, rarityOdds, rollRarity } from '../rarity';
 import { RoomId, RoomState, Run, newRun } from '../run';
 import { STAT_LABELS, Stats, formatMult } from '../stats';
 import { drawScorch, playExplosion } from '../world/explosion';
-import { DoorSide, drawRoom } from '../world/room';
+import { priceOf, rollShopItems } from '../shop';
+import { DoorSide, drawLockedDoor, drawRoom } from '../world/room';
 
 type MoveKeys = Record<'w' | 'a' | 's' | 'd', Phaser.Input.Keyboard.Key>;
 type AimKeys = Record<Facing, Phaser.Input.Keyboard.Key>;
@@ -62,9 +64,17 @@ const HEART_ROW_H = 30;
 
 /** Portas abertas de cada sala e para onde levam. */
 const DOORS: Record<RoomId, Partial<Record<DoorSide, RoomId>>> = {
-  start: { right: 'treasure' },
+  start: { right: 'treasure', up: 'shop' },
   treasure: { left: 'start' },
+  shop: { down: 'start' },
 };
+
+/** Portas que começam trancadas (precisam de uma chave), como "sala:lado". */
+const LOCKED_DOORS = ['start:up'];
+
+// Itens da loja: posição na frente da bancada.
+const SHOP_ITEM_Y = 330;
+const SHOP_ITEM_GAP = 150;
 
 const OPPOSITE: Record<DoorSide, DoorSide> = { left: 'right', right: 'left', up: 'down', down: 'up' };
 
@@ -101,6 +111,13 @@ export class RoomScene extends Phaser.Scene {
   private items: ItemPickup[] = [];
   private pickups: Pickup[] = [];
   private bombs: Bomb[] = [];
+  private vendor?: Vendor;
+  /** Desenhos das portas trancadas desta sala, por lado. */
+  private locks = new Map<DoorSide, Phaser.GameObjects.Graphics>();
+  /** Evita repetir o aviso de "precisa de chave/moedas" a cada quadro. */
+  private nagUntil = 0;
+  /** Depois de destrancar, espera um pouco antes de deixar passar pela porta. */
+  private doorPauseUntil = 0;
   private counters = new Map<PickupKind, Phaser.GameObjects.Text>();
   private counterIcons = new Map<PickupKind, Phaser.GameObjects.Image>();
   private heartRows = 1;
@@ -141,9 +158,17 @@ export class RoomScene extends Phaser.Scene {
     this.dummy = undefined;
     this.chest = undefined;
     this.bombs = [];
+    this.vendor = undefined;
+    this.locks.clear();
+    this.nagUntil = 0;
+    this.doorPauseUntil = 0;
     createFurballTexture(this, this.cat);
     drawRoom(this, Object.keys(DOORS[this.roomId]) as DoorSide[]);
     this.physics.world.setBounds(FLOOR.x, FLOOR.y, FLOOR.width, FLOOR.height);
+
+    for (const side of Object.keys(DOORS[this.roomId]) as DoorSide[]) {
+      if (this.isLocked(side)) this.locks.set(side, drawLockedDoor(this, side));
+    }
 
     const firstVisit = !this.run.rooms[this.roomId];
     for (const sc of this.roomState.scorches ?? []) drawScorch(this, sc.x, sc.y, sc.seed);
@@ -151,18 +176,26 @@ export class RoomScene extends Phaser.Scene {
       this.drawSpikes();
       // Gato de teste parado no meio da sala.
       this.dummy = new DummyCat(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 12, 'gray');
-    } else {
+    } else if (this.roomId === 'treasure') {
       this.chest = new Chest(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 20, !!this.roomState.chestOpen);
+    } else if (this.roomId === 'shop') {
+      // O vendedor é um gato diferente do que você escolheu
+      const vendorCat = PLAYABLE.find((c) => c !== this.cat && c !== 'black') ?? 'orange';
+      this.vendor = new Vendor(this, GAME_WIDTH / 2, FLOOR.y + 120, vendorCat);
+      if (firstVisit) this.stockShop();
     }
     // Itens que ficaram no chão da última vez que o gato esteve aqui
-    for (const it of this.roomState.items) this.items.push(new ItemPickup(this, it.x, it.y, it.id));
+    for (const it of this.roomState.items) {
+      this.items.push(new ItemPickup(this, it.x, it.y, it.id, { kind: 'none' }, it.price));
+    }
     for (const p of this.roomState.pickups) this.pickups.push(new Pickup(this, p.x, p.y, p.kind, false, p.tag));
     if (firstVisit && this.roomId === 'start') this.respawnItems(false);
 
     const spawn = this.spawnPoint();
     this.player = new Player(this, spawn.x, spawn.y, this.cat, this.run.stats, this.run.hp, this.run.shield, spawn.facing);
     if (this.dummy) this.physics.add.collider(this.player.body, this.dummy.body);
-    if (this.chest) this.physics.add.collider(this.player.body, this.chest.body, () => this.openChest());
+    if (this.chest) this.physics.add.collider(this.player.body, this.chest.body, () => this.tryOpenChest());
+    if (this.vendor) this.physics.add.collider(this.player.body, this.vendor.body);
     this.player.on('hp', () => this.updateHearts(true));
     this.player.on('stats', (stats: Stats) => this.updateStats(stats));
     this.player.on('dead', () => this.showGameOver());
@@ -247,6 +280,7 @@ export class RoomScene extends Phaser.Scene {
       }
     }
     this.dummy?.update(time);
+    this.vendor?.update(time);
     this.furballs = this.furballs.filter((f) => !f.dead);
 
     this.checkSpikes();
@@ -270,11 +304,41 @@ export class RoomScene extends Phaser.Scene {
       down: midX && this.move.y > 0 && b.bottom >= FLOOR.y + FLOOR.height - 1,
     };
     for (const [side, target] of Object.entries(DOORS[this.roomId]) as [DoorSide, RoomId][]) {
-      if (pushing[side]) {
-        this.goToRoom(target, OPPOSITE[side]);
-        return;
-      }
+      if (!pushing[side] || this.time.now < this.doorPauseUntil) continue;
+      if (this.isLocked(side)) this.tryUnlock(side);
+      else this.goToRoom(target, OPPOSITE[side]);
+      return;
     }
+  }
+
+  /** A porta está trancada? (as duas salas ligadas pela porta compartilham o estado) */
+  private isLocked(side: DoorSide) {
+    const here = `${this.roomId}:${side}`;
+    const target = DOORS[this.roomId][side];
+    const there = target ? `${target}:${OPPOSITE[side]}` : '';
+    const locked = LOCKED_DOORS.includes(here) || LOCKED_DOORS.includes(there);
+    return locked && !this.run.unlocked.includes(here) && !this.run.unlocked.includes(there);
+  }
+
+  /** Gasta uma chave (ou usa a dourada) para destrancar a porta. */
+  private tryUnlock(side: DoorSide) {
+    if (this.time.now < this.nagUntil) return;
+    const usedGolden = this.run.inventory.goldenKey;
+    if (!useKey(this.run.inventory)) {
+      this.nagUntil = this.time.now + 1500;
+      this.showBanner('Trancada', 'Precisa de uma chave', '#c8c0b8');
+      this.cameras.main.shake(80, 0.003);
+      return;
+    }
+    this.run.unlocked.push(`${this.roomId}:${side}`);
+    this.updateCounters(usedGolden ? undefined : 'key');
+    // O cadeado cai e a porta some
+    const lock = this.locks.get(side);
+    this.locks.delete(side);
+    if (lock) {
+      this.tweens.add({ targets: lock, alpha: 0, y: lock.y + 10, duration: 300, onComplete: () => lock.destroy() });
+    }
+    this.doorPauseUntil = this.time.now + 450; // dá tempo de ver a porta abrindo antes de passar
   }
 
   private goToRoom(room: RoomId, enterFrom: DoorSide) {
@@ -291,12 +355,25 @@ export class RoomScene extends Phaser.Scene {
   private saveRoom() {
     this.run.hp = this.player.hp;
     this.run.shield = this.player.shield;
-    this.roomState.items = this.items.filter((i) => !i.collected).map((i) => ({ id: i.info.id, x: i.x, y: i.y }));
+    this.roomState.items = this.items.filter((i) => !i.collected).map((i) => ({ id: i.info.id, x: i.x, y: i.y, price: i.price }));
     this.roomState.pickups = this.pickups.filter((p) => !p.collected).map((p) => ({ kind: p.kind, x: p.x, y: p.y, tag: p.tag }));
     if (this.chest) this.roomState.chestOpen = this.chest.opened;
   }
 
   /** Abre o baú e sorteia um item pela sorte do gato. */
+  /** O baú é trancado: gasta uma chave (ou usa a dourada) para abrir. */
+  private tryOpenChest() {
+    if (!this.chest || this.chest.opened || this.time.now < this.nagUntil) return;
+    const usedGolden = this.run.inventory.goldenKey;
+    if (!useKey(this.run.inventory)) {
+      this.nagUntil = this.time.now + 1500;
+      this.showBanner('Baú trancado', 'Precisa de uma chave', '#c8c0b8');
+      return;
+    }
+    if (!usedGolden) this.updateCounters('key');
+    this.openChest();
+  }
+
   private openChest() {
     if (!this.chest || !this.chest.open()) return;
     const rarity = rollRarity(this.run.stats.luck);
@@ -322,6 +399,10 @@ export class RoomScene extends Phaser.Scene {
   private respawnItems(animate = true) {
     if (this.chest) {
       if (this.chest.opened) this.chest.close();
+      return;
+    }
+    if (this.vendor) {
+      this.stockShop(true);
       return;
     }
     const spawn: ItemSpawn = animate ? { kind: 'pop' } : { kind: 'none' };
@@ -412,10 +493,6 @@ export class RoomScene extends Phaser.Scene {
       this.dummy.takeHit(Math.cos(a), Math.sin(a), BOMB_DAMAGE_ENEMY);
       if (this.showDamage) this.showDamageNumber(this.dummy.x, this.dummy.y - 70, BOMB_DAMAGE_ENEMY);
     }
-    // Explosões também abrem o baú, como no Isaac
-    if (this.chest && !this.chest.opened && Phaser.Math.Distance.Between(x, y, this.chest.x, this.chest.y) < BLAST_RADIUS + 20) {
-      this.openChest();
-    }
   }
 
   private checkPickups(time: number) {
@@ -434,9 +511,37 @@ export class RoomScene extends Phaser.Scene {
           this.updateCounters(p.kind);
         }
       });
-      if (p.kind === 'goldenKey') this.showBanner('Chave dourada', 'Abre todas as portas do mapa', '#f2c879');
+      if (p.kind === 'goldenKey') this.showBanner('Chave dourada', 'Abre portas e baús sem gastar chaves neste nível', '#f2c879');
     }
     this.pickups = this.pickups.filter((p) => !p.collected);
+  }
+
+  /** Põe à venda itens sorteados nos espaços vazios da bancada (3 no total). */
+  private stockShop(animate = false) {
+    const slots = [-1, 0, 1].map((i) => ({ x: GAME_WIDTH / 2 + i * SHOP_ITEM_GAP, y: SHOP_ITEM_Y }));
+    const free = slots.filter((s) => !this.items.some((it) => !it.collected && it.x === s.x && it.y === s.y));
+    const forSale = this.items.filter((it) => !it.collected).map((it) => it.info.id);
+    const ids = rollShopItems(this.run.stats.luck, free.length, forSale);
+    free.forEach((slot, i) => {
+      const id = ids[i];
+      this.items.push(new ItemPickup(this, slot.x, slot.y, id, animate ? { kind: 'pop' } : { kind: 'none' }, priceOf(id)));
+    });
+  }
+
+  /** Compra um item da loja, se houver moedas. */
+  private tryBuy(item: ItemPickup) {
+    const price = item.price ?? 0;
+    if (this.run.inventory.coins < price) {
+      if (this.time.now >= this.nagUntil) {
+        this.nagUntil = this.time.now + 1500;
+        this.vendor?.say(`Faltam ${price - this.run.inventory.coins} moedas!`);
+      }
+      return false;
+    }
+    this.run.inventory.coins -= price;
+    this.updateCounters('coin');
+    this.vendor?.say('Obrigado! Miau!', true);
+    return true;
   }
 
   private checkItems(time: number) {
@@ -444,6 +549,7 @@ export class RoomScene extends Phaser.Scene {
     for (const item of this.items) {
       item.update(time);
       if (!this.player.dead && item.touches(feet.x, feet.y)) {
+        if (item.price !== undefined && !this.tryBuy(item)) continue;
         item.collect(feet.x, feet.y);
         this.player.collect(item.info);
         const rarity = RARITY_INFO[item.info.rarity];
@@ -527,7 +633,7 @@ export class RoomScene extends Phaser.Scene {
       case 'key':
         return { x, y: top + gap * 2 };
       case 'goldenKey':
-        return { x: x + 52, y: top + gap * 2 };
+        return { x, y: top + gap * 2 }; // no mesmo lugar da prateada
       case 'blueHeart':
         return this.heartSlot(this.player.stats.maxHp + Math.floor(this.player.shield / 2), true);
       default:
@@ -568,9 +674,11 @@ export class RoomScene extends Phaser.Scene {
         this.tweens.add({ targets: text, scale: 1, duration: 200, ease: 'Back.Out' });
       }
     }
+    // A chave dourada fica por cima da prateada no contador
     this.goldenKeyIcon?.setVisible(inv.goldenKey);
+    this.counterIcons.get('key')?.setVisible(!inv.goldenKey);
     if (bump === 'goldenKey' && this.goldenKeyIcon) {
-      this.goldenKeyIcon.setScale(1.1);
+      this.goldenKeyIcon.setScale(1.3);
       this.tweens.add({ targets: this.goldenKeyIcon, scale: 0.5, duration: 300, ease: 'Back.Out' });
     }
   }
@@ -692,7 +800,7 @@ export class RoomScene extends Phaser.Scene {
   private createTopButtons() {
     const y = 31;
     this.makeButton(GAME_WIDTH - 20 - 66, y, 132, '↺ Início (Esc)', () => this.backToSelect());
-    const refill = this.roomId === 'treasure' ? '+ Novo baú' : '+ Repor itens';
+    const refill = this.roomId === 'treasure' ? '+ Novo baú' : this.roomId === 'shop' ? '+ Repor loja' : '+ Repor itens';
     this.makeButton(GAME_WIDTH - 162 - 56, y, 112, refill, () => this.respawnItems());
     const damageButton = this.makeButton(GAME_WIDTH - 284 - 58, y, 116, '', () => {
       this.registry.set('showDamage', !this.showDamage);

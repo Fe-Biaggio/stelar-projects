@@ -81,26 +81,35 @@ export function drawRoom(scene: Phaser.Scene, openDoors: DoorSide[] = []) {
   g.lineStyle(3, 0x120e0c).strokeRect(FLOOR.x, FLOOR.y, FLOOR.width, FLOOR.height);
 
   // Portas no meio de cada parede.
-  const cx = GAME_WIDTH / 2;
-  const cy = GAME_HEIGHT / 2;
-  const open = (side: DoorSide) => openDoors.includes(side);
-  drawDoor(g, cx, WALL / 2, 0, open('up'));
-  drawDoor(g, cx, GAME_HEIGHT - WALL / 2, Math.PI, open('down'));
-  drawDoor(g, WALL / 2, cy, -Math.PI / 2, open('left'));
-  drawDoor(g, GAME_WIDTH - WALL / 2, cy, Math.PI / 2, open('right'));
+  for (const side of Object.keys(DOOR_POS) as DoorSide[]) drawDoor(g, side, openDoors.includes(side));
 }
 
-function drawDoor(g: Phaser.GameObjects.Graphics, x: number, y: number, rotation: number, open: boolean) {
-  // Desenha uma porta voltada para cima e gira em torno do centro.
-  const pts = (list: number[][]) =>
+/** Centro e rotação de cada porta (o desenho base é a porta de cima). */
+export const DOOR_POS: Record<DoorSide, { x: number; y: number; rotation: number }> = {
+  up: { x: GAME_WIDTH / 2, y: WALL / 2, rotation: 0 },
+  down: { x: GAME_WIDTH / 2, y: GAME_HEIGHT - WALL / 2, rotation: Math.PI },
+  left: { x: WALL / 2, y: GAME_HEIGHT / 2, rotation: -Math.PI / 2 },
+  right: { x: GAME_WIDTH - WALL / 2, y: GAME_HEIGHT / 2, rotation: Math.PI / 2 },
+};
+
+/** Converte pontos da porta "de cima" para a posição/rotação da porta `side`. */
+function doorPoints(side: DoorSide) {
+  const { x, y, rotation } = DOOR_POS[side];
+  return (list: number[][]) =>
     list.map(([px, py]) => {
       const p = new Phaser.Math.Vector2(px, py).rotate(rotation);
       return new Phaser.Math.Vector2(x + p.x, y + p.y);
     });
+}
+
+const OPENING = [[-34, 32], [-34, -10], [-24, -16], [24, -16], [34, -10], [34, 32]];
+
+function drawDoor(g: Phaser.GameObjects.Graphics, side: DoorSide, open: boolean) {
+  const pts = doorPoints(side);
 
   g.fillStyle(0x5c514b).fillPoints(pts([[-56, 32], [-56, -18], [-40, -32], [40, -32], [56, -18], [56, 32]]), true);
   g.fillStyle(0x2c2522).fillPoints(pts([[-42, 32], [-42, -14], [-30, -22], [30, -22], [42, -14], [42, 32]]), true);
-  const opening = [[-34, 32], [-34, -10], [-24, -16], [24, -16], [34, -10], [34, 32]];
+  const opening = OPENING;
   if (open) {
     // Passagem escura com o chão de madeira entrando um pouco
     g.fillStyle(0x0a0807).fillPoints(pts(opening), true);
@@ -118,4 +127,32 @@ function drawDoor(g: Phaser.GameObjects.Graphics, x: number, y: number, rotation
     g.lineStyle(2, 0x1a1410).strokePoints(pts(opening), true);
   }
   g.lineStyle(3, 0x171210).strokePoints(pts([[-56, 32], [-56, -18], [-40, -32], [40, -32], [56, -18], [56, 32]]), false);
+}
+
+/**
+ * Porta trancada desenhada por cima da passagem: madeira com faixas de ferro e um cadeado
+ * dourado com buraco de fechadura. Ao destrancar, este desenho é removido.
+ */
+export function drawLockedDoor(scene: Phaser.Scene, side: DoorSide) {
+  const g = scene.add.graphics().setDepth(-90);
+  const pts = doorPoints(side);
+  g.fillStyle(0x4a2e1c).fillPoints(pts(OPENING), true);
+  g.lineStyle(2, 0x2a190f);
+  for (const px of [-17, 0, 17]) {
+    const [a, b] = pts([[px, -14], [px, 32]]);
+    g.lineBetween(a.x, a.y, b.x, b.y);
+  }
+  g.fillStyle(0x2e2a28).fillPoints(pts([[-34, -2], [-34, -8], [34, -8], [34, -2]]), true);
+  g.fillStyle(0x2e2a28).fillPoints(pts([[-34, 22], [-34, 16], [34, 16], [34, 22]]), true);
+  g.lineStyle(2, 0x140c08).strokePoints(pts(OPENING), true);
+
+  // Cadeado no meio da porta
+  const [c] = pts([[0, 8]]);
+  g.lineStyle(4, 0x9a9490).strokeCircle(c.x, c.y - 9, 7);
+  g.fillStyle(0x1a120c).fillRoundedRect(c.x - 13, c.y - 7, 26, 22, 5);
+  g.fillStyle(0xe2b13c).fillRoundedRect(c.x - 11, c.y - 5, 22, 18, 4);
+  g.fillStyle(0xffe08a).fillRect(c.x - 9, c.y - 3, 4, 12);
+  g.fillStyle(0x1a120c).fillCircle(c.x, c.y + 2, 3);
+  g.fillTriangle(c.x - 2, c.y + 3, c.x + 2, c.y + 3, c.x, c.y + 10);
+  return g;
 }

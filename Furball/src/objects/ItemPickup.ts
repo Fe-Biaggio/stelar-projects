@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { ITEMS, ItemId, ItemInfo } from '../items';
+import { PICKUP_FRAME } from '../pickups';
 import { RARITY_INFO } from '../rarity';
 import { knockAlong } from '../world/knock';
 
@@ -18,6 +19,7 @@ export class ItemPickup {
   private readonly sprite: Phaser.GameObjects.Image;
   private readonly shadow: Phaser.GameObjects.Ellipse;
   private readonly glow?: Phaser.GameObjects.Ellipse;
+  private readonly priceTag?: Phaser.GameObjects.Container;
   private readonly phase = Math.random() * Math.PI * 2;
   private readonly readyAt: number;
   /** Enquanto o item voa do baú, o balanço fica desligado. */
@@ -29,6 +31,8 @@ export class ItemPickup {
     public y: number,
     id: ItemId,
     spawn: ItemSpawn = { kind: 'none' },
+    /** Preço em moedas (itens da loja). Sem preço, é só passar por cima para pegar. */
+    readonly price?: number,
   ) {
     this.info = ITEMS[id];
     const now = scene.time.now;
@@ -48,6 +52,15 @@ export class ItemPickup {
       .setOrigin(0.5, 1)
       .setScale(ITEM_SCALE)
       .setDepth(y);
+
+    if (price !== undefined) {
+      // Etiqueta de preço embaixo do item: moedinha + valor
+      const coin = scene.add.image(-10, 0, 'pickups', PICKUP_FRAME.coin).setScale(0.42);
+      const value = scene.add
+        .text(2, 0, String(price), { fontFamily: 'monospace', fontSize: '16px', fontStyle: 'bold', color: '#ffe08a', stroke: '#1a1210', strokeThickness: 4 })
+        .setOrigin(0, 0.5);
+      this.priceTag = scene.add.container(x, y + 20, [coin, value]).setDepth(y + 1);
+    }
 
     if (spawn.kind === 'pop') {
       this.sprite.setScale(0);
@@ -100,7 +113,7 @@ export class ItemPickup {
 
   /** Lançado pela explosão: desliza (dx, dy) pelo chão com um pulo. */
   knock(dx: number, dy: number) {
-    if (this.collected) return;
+    if (this.collected || this.price !== undefined) return; // itens da loja ficam no lugar
     this.landed = false;
     this.scene.tweens.killTweensOf(this.sprite);
     knockAlong(
@@ -134,6 +147,7 @@ export class ItemPickup {
     this.collected = true;
     this.shadow.destroy();
     this.glow?.destroy();
+    this.priceTag?.destroy();
     this.sprite.setDepth(25_000);
     this.scene.tweens.killTweensOf(this.sprite);
     this.scene.tweens.add({

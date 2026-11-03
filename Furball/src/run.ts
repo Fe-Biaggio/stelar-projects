@@ -5,12 +5,14 @@ import { HP_PER_HEART, Stats, newStats } from './stats';
 
 // Estado de uma partida: o que precisa sobreviver quando o gato troca de sala.
 
-export type RoomId = 'start' | 'treasure';
+export type RoomId = 'start' | 'treasure' | 'shop';
 
 export interface FloorItem {
   id: ItemId;
   x: number;
   y: number;
+  /** Itens da loja têm preço em moedas. */
+  price?: number;
 }
 
 export interface FloorPickup {
@@ -46,10 +48,34 @@ export interface Run {
   /** Escudo dos corações azuis, em pontos. Não se recupera. */
   shield: number;
   inventory: Inventory;
+  /** Nível (andar) atual. A chave dourada só vale no nível em que foi pega. */
+  level: number;
+  /** Portas trancadas que já foram abertas neste nível, como "start:up". */
+  unlocked: string[];
   rooms: Partial<Record<RoomId, RoomState>>;
 }
 
 export function newRun(cat: CatId): Run {
   const stats = newStats();
-  return { cat, stats, hp: stats.maxHp * HP_PER_HEART, shield: 0, inventory: newInventory(), rooms: {} };
+  return {
+    cat,
+    stats,
+    hp: stats.maxHp * HP_PER_HEART,
+    shield: 0,
+    inventory: newInventory(),
+    level: 1,
+    unlocked: [],
+    rooms: {},
+  };
+}
+
+/**
+ * Vai para o próximo nível (depois de derrotar o boss): mapa novo e a chave dourada é perdida.
+ * Vida, status, moedas, bombas e chaves prateadas continuam.
+ */
+export function startNextLevel(run: Run) {
+  run.level += 1;
+  run.inventory.goldenKey = false;
+  run.unlocked = [];
+  run.rooms = {};
 }

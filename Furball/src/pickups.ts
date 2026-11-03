@@ -26,12 +26,23 @@ export interface Inventory {
   coins: number;
   bombs: number;
   keys: number;
-  /** Chave dourada: abre todas as portas do mapa (quando houver portas trancadas). */
+  /** Chave dourada: abre portas e baús sem gastar chaves, até o fim do nível (startNextLevel). */
   goldenKey: boolean;
 }
 
 export function newInventory(): Inventory {
   return { coins: 0, bombs: 0, keys: 0, goldenKey: false };
+}
+
+/**
+ * Usa uma chave para abrir uma porta ou baú. Com a chave dourada não gasta nada.
+ * Retorna false se não houver chave.
+ */
+export function useKey(inv: Inventory) {
+  if (inv.goldenKey) return true;
+  if (inv.keys <= 0) return false;
+  inv.keys -= 1;
+  return true;
 }
 
 /** Soma o coletável no inventário (corações não entram aqui: vão direto para a vida). */

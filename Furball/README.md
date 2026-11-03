@@ -49,11 +49,21 @@ Na sala de teste há um de cada no chão; R ou Esc recomeçam com os status zera
 Coletáveis de inventário, contados embaixo dos corações (até 99 cada):
 
 - **Moeda**, **bomba** e **chave prateada** – cada uma soma 1 no contador.
-- **Chave dourada** – aparece ao lado das chaves; vai abrir todas as portas do mapa quando
-  houver portas trancadas.
+- **Chave dourada** – fica por cima do ícone da chave prateada no contador. Enquanto você a
+  tiver, portas e baús abrem sem gastar chaves. Ela só vale no nível atual: ao derrotar o
+  boss e ir para o próximo mapa, ela é perdida (`startNextLevel` em `src/run.ts`).
 
 Na sala inicial há duas moedas, uma bomba, uma chave e uma chave dourada para teste.
-Chaves ainda só são coletadas; usá-las vem depois.
+
+### Portas trancadas, baú e loja
+
+- A **porta de cima** da sala inicial tem cadeado: empurrá-la gasta 1 chave prateada (ou
+  nenhuma, com a chave dourada). Depois de aberta, fica aberta.
+- O **baú** da sala do tesouro também gasta 1 chave para abrir.
+- Atrás da porta trancada fica a **loja**: um gato vendedor atrás de uma bancada e 3 itens
+  sorteados (a sorte ajuda) com preço em moedas pela raridade — comum 3, incomum 5, raro 8,
+  épico 12. Passe por cima do item para comprar; sem moedas suficientes, o vendedor avisa
+  quanto falta. O botão **+ Repor loja** sorteia itens novos para os espaços vazios.
 
 ### Corações
 
@@ -112,13 +122,17 @@ Furball/
 │   ├── items.ts         # itens coletáveis, efeitos e raridade
 │   ├── pickups.ts       # moedas, bombas, chaves e corações do chão
 │   ├── rarity.ts        # raridades e chances do baú conforme a sorte
-│   ├── run.ts           # estado da partida (status, vida, o que ficou em cada sala)
+│   ├── run.ts           # estado da partida (status, vida, nível, o que ficou em cada sala)
+│   ├── shop.ts          # itens e preços da loja
 │   ├── stats.ts         # status do gato (multiplicadores)
 │   ├── objects/         # jogador, inimigos, projéteis...
 │   ├── scenes/          # carregamento, seleção de personagem, sala
 │   └── world/           # desenho da sala, explosão e empurrão
 └── tools/               # scripts para recortar sprites das folhas
 ```
+
+Em `npm run dev`, um POST em `/__screenshot` com `{ name, data }` (PNG em data URL) salva
+um print do jogo em `screenshots/` (fora do git), para enviar capturas durante o desenvolvimento.
 
 Para regerar os sprites a partir das folhas: `python tools/extract_cats.py`,
 `python tools/extract_ui.py`, `python tools/extract_items.py` e `python tools/extract_pickups.py`.
