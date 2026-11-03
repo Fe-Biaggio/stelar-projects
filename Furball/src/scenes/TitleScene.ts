@@ -1,11 +1,14 @@
 import Phaser from 'phaser';
 import { BTN, PadInput } from '../ui/Gamepad';
+import { playSfx } from '../audio/sfx';
 import { GAME_HEIGHT, GAME_WIDTH } from '../config';
 import { GameMode } from '../run';
 import { drawRoom } from '../world/room';
 
+type TitleMode = GameMode | 'multi';
+
 interface ModeOption {
-  mode: GameMode;
+  mode: TitleMode;
   title: string;
   detail: string;
 }
@@ -21,10 +24,15 @@ const OPTIONS: ModeOption[] = [
     title: 'Jogar',
     detail: 'Mapa aleatório com inimigos, tesouro, loja e um boss por nível',
   },
+  {
+    mode: 'multi',
+    title: 'Multiplayer',
+    detail: 'Co-op (2 gatos) ou VS (até 4) pela internet',
+  },
 ];
 
 const BOX_W = 520;
-const BOX_H = 74;
+const BOX_H = 66;
 
 /** Tela inicial: escolhe entre o modo desenvolvedor e o jogo para valer. */
 export class TitleScene extends Phaser.Scene {
@@ -37,8 +45,8 @@ export class TitleScene extends Phaser.Scene {
     super('Title');
   }
 
-  init(data: { mode?: GameMode }) {
-    this.index = data.mode === 'dev' ? 0 : 1;
+  init(data: { mode?: TitleMode }) {
+    this.index = Math.max(0, OPTIONS.findIndex((o) => o.mode === (data.mode ?? 'game')));
     this.choosing = false;
   }
 
@@ -61,7 +69,7 @@ export class TitleScene extends Phaser.Scene {
       const detail = this.add
         .text(-BOX_W / 2 + 22, 16, opt.detail, { fontFamily: 'monospace', fontSize: '13px', color: '#b8a898' })
         .setOrigin(0, 0.5);
-      const box = this.add.container(GAME_WIDTH / 2, 276 + i * (BOX_H + 22), [bg, title, detail]);
+      const box = this.add.container(GAME_WIDTH / 2, 252 + i * (BOX_H + 16), [bg, title, detail]);
       box.setSize(BOX_W, BOX_H).setInteractive({ useHandCursor: true });
       box.on('pointerover', () => this.select(i));
       box.on('pointerup', () => {
@@ -72,10 +80,12 @@ export class TitleScene extends Phaser.Scene {
     });
 
     const kb = this.input.keyboard!;
-    kb.on('keydown-UP', () => this.select(0));
-    kb.on('keydown-W', () => this.select(0));
-    kb.on('keydown-DOWN', () => this.select(1));
-    kb.on('keydown-S', () => this.select(1));
+    const up = () => this.select((this.index + OPTIONS.length - 1) % OPTIONS.length);
+    const down = () => this.select((this.index + 1) % OPTIONS.length);
+    kb.on('keydown-UP', up);
+    kb.on('keydown-W', up);
+    kb.on('keydown-DOWN', down);
+    kb.on('keydown-S', down);
     kb.on('keydown-ENTER', () => this.choose());
     kb.on('keydown-SPACE', () => this.choose());
 
@@ -86,8 +96,8 @@ export class TitleScene extends Phaser.Scene {
   update() {
     this.pad.poll();
     const dir = this.pad.menuDir();
-    if (dir === 'up') this.select(0);
-    if (dir === 'down') this.select(1);
+    if (dir === 'up') this.select((this.index + OPTIONS.length - 1) % OPTIONS.length);
+    if (dir === 'down') this.select((this.index + 1) % OPTIONS.length);
     if (this.pad.pressed(BTN.A) || this.pad.pressed(BTN.START)) this.choose();
   }
 
@@ -113,7 +123,10 @@ export class TitleScene extends Phaser.Scene {
     if (this.choosing) return;
     this.choosing = true;
     const mode = OPTIONS[this.index].mode;
+    playSfx('click');
     this.cameras.main.fadeOut(200);
-    this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => this.scene.start('Select', { mode }));
+    this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () =>
+      mode === 'multi' ? this.scene.start('Multi', {}) : this.scene.start('Select', { mode }),
+    );
   }
 }

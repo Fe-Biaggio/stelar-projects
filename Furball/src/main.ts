@@ -4,6 +4,15 @@ import { PreloadScene } from './scenes/PreloadScene';
 import { RoomScene } from './scenes/RoomScene';
 import { SelectScene } from './scenes/SelectScene';
 import { TitleScene } from './scenes/TitleScene';
+import { BrowseScene, CreateScene, MultiScene } from './scenes/MultiScenes';
+import { LobbyScene } from './scenes/LobbyScene';
+import { MirrorScene } from './scenes/MirrorScene';
+import { registerRoomScene, vs } from './scenes/vsDirector';
+import { net, privateId } from './net/peer';
+import { session } from './net/session';
+import { lobbyConfig } from './scenes/lobbyState';
+import { joinRoom } from './scenes/MultiScenes';
+import { installAudioUnlock } from './audio/sfx';
 
 // Abra com ?debug na URL para ver as caixas de colisão.
 const debug = new URLSearchParams(window.location.search).has('debug');
@@ -22,8 +31,16 @@ const game = new Phaser.Game({
     default: 'arcade',
     arcade: { debug },
   },
-  scene: [PreloadScene, TitleScene, SelectScene, RoomScene],
+  scene: [PreloadScene, TitleScene, SelectScene, RoomScene, MultiScene, CreateScene, BrowseScene, LobbyScene, MirrorScene],
 });
 
+// Modo VS: cada sala ocupada é uma cena própria
+registerRoomScene((key) => new RoomScene(key));
+installAudioUnlock(game);
+
 // Em desenvolvimento, deixa o jogo acessível pelo console do navegador (window.furball).
-if (import.meta.env.DEV) (window as unknown as { furball: Phaser.Game }).furball = game;
+if (import.meta.env.DEV) {
+  const w = window as unknown as Record<string, unknown>;
+  w.furball = game;
+  w.furballDev = { net, session, vs, lobbyConfig, joinRoom, privateId };
+}

@@ -119,6 +119,28 @@ export class Player extends Phaser.Events.EventEmitter {
     return this.hp + this.shield <= 0;
   }
 
+  /** Para onde o gato está olhando (o botão A atira para lá). */
+  get facingDir(): Facing {
+    return this.facing;
+  }
+
+  /** Morre na hora (sala destruída no VS, jogador que saiu da partida). */
+  kill() {
+    if (this.dead) return;
+    this.hp = 0;
+    this.shield = 0;
+    this.emitHp();
+    this.die();
+  }
+
+  /** Tira o gato da cena (trocou de sala no VS). */
+  destroy() {
+    this.removeAllListeners();
+    this.body.destroy();
+    this.sprite.destroy();
+    this.shadow.destroy();
+  }
+
   /** Sobe (ou desce) do móvel: `height` em pixels; `minDepth` para desenhar na frente dele. */
   setElevation(height: number, minDepth: number) {
     this.liftTarget = height;
@@ -205,6 +227,7 @@ export class Player extends Phaser.Events.EventEmitter {
     this.shield = Math.round(this.shield * 100) / 100;
     this.hp = Math.max(0, Math.round((this.hp - (amount - fromShield)) * 100) / 100);
     this.emitHp();
+    this.emit('hurt');
 
     const push = new Phaser.Math.Vector2(this.feet.x - fromX, this.feet.y - fromY);
     if (push.lengthSq() === 0) push.set(0, 1);

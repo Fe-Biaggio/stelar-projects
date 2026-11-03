@@ -103,6 +103,22 @@ export class TouchControls {
     });
   }
 
+  /** Os controles são só deste aparelho: não vão para a tela dos outros jogadores. */
+  markLocal() {
+    for (const o of [this.stickBase, this.stickKnob, this.useButton, ...this.aimButtons.values(), ...this.extra]) {
+      (o as unknown as { __local?: boolean }).__local = true;
+    }
+  }
+
+  /** Remove os controles da cena (o gato saiu desta sala no VS). */
+  destroy() {
+    this.scene.input.off('pointerdown', this.onDown, this);
+    this.scene.input.off('pointermove', this.onMove, this);
+    this.scene.input.off('pointerup', this.onUp, this);
+    this.scene.input.off('pointerupoutside', this.onUp, this);
+    for (const o of [this.stickBase, this.stickKnob, this.useButton, ...this.aimButtons.values(), ...this.extra]) o.destroy();
+  }
+
   /** Esconde tudo (quando o jogador passa a usar um controle físico). */
   hide() {
     this.hidden = true;

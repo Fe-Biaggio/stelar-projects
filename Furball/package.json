@@ -9,7 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "phaser": "^3.90.0"
+    "peerjs": "^1.5.5",
+    "phaser": "^3.90.0",
+    "zzfx": "^1.4.0"
   },
   "devDependencies": {
     "typescript": "^5.8.3",

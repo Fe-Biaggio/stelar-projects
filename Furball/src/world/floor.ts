@@ -25,6 +25,14 @@ export interface RoomDef {
   npc?: NpcKind;
   /** Sala comum com um item de graça no meio. */
   item?: boolean;
+  /** VS: qual boss mora aqui (nível 1 a 5). */
+  bossLevel?: number;
+}
+
+/** Ajustes do mapa no multiplayer (co-op): tamanho e quantidade de itens. */
+export interface FloorOptions {
+  sizeMult?: number;
+  itemMult?: number;
 }
 
 export interface FloorMap {
@@ -77,8 +85,9 @@ export function devFloor(): FloorMap {
  * nova encosta em só uma sala existente). Nas pontas sem saída ficam o boss (a mais distante),
  * o tesouro e a loja (trancada).
  */
-export function generateFloor(level: number, rng: () => number = Math.random): FloorMap {
-  const target = Math.min(7 + level * 2, 15);
+export function generateFloor(level: number, rng: () => number = Math.random, opts: FloorOptions = {}): FloorMap {
+  const target = Math.round(Math.min(7 + level * 2, 15) * (opts.sizeMult ?? 1));
+  const itemMult = opts.itemMult ?? 1;
   for (let attempt = 0; attempt < 200; attempt++) {
     const cells = new Map<string, [number, number]>([[roomKey(0, 0), [0, 0]]]);
     const count = (gx: number, gy: number) =>
@@ -91,7 +100,7 @@ export function generateFloor(level: number, rng: () => number = Math.random): F
       const [dx, dy] = Object.values(STEP)[Math.floor(rng() * 4)] as [number, number];
       const nx = bx + dx;
       const ny = by + dy;
-      if (cells.has(roomKey(nx, ny)) || Math.abs(nx) > 4 || Math.abs(ny) > 3) continue;
+      if (cells.has(roomKey(nx, ny)) || Math.abs(nx) > 5 || Math.abs(ny) > 4) continue;
       if (count(nx, ny) > 1) continue; // evita blocos 2x2 e caminhos em círculo
       cells.set(roomKey(nx, ny), [nx, ny]);
     }
@@ -129,13 +138,13 @@ export function generateFloor(level: number, rng: () => number = Math.random): F
     rooms[shop].locked = true;
     // Salas comuns com baú: pelo menos 2 (3 a partir do nível 3); a primeira é sempre de madeira
     const normals = Object.values(rooms).filter((r) => r.type === 'normal');
-    const chests = Math.min(normals.length, level >= 3 ? 3 : 2);
+    const chests = Math.min(normals.length, Math.round((level >= 3 ? 3 : 2) * itemMult));
     for (let i = 0; i < chests; i++) {
       const room = normals.splice(Math.floor(rng() * normals.length), 1)[0];
       room.chest = i === 0 || rng() < 0.5 ? 'wood' : 'gold';
     }
     // Pelo menos 2 salas comuns com um item no meio (sem baú)
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < Math.round(2 * itemMult); i++) {
       const free = Object.values(rooms).filter((r) => r.type === 'normal' && !r.chest && !r.item);
       if (free.length) free[Math.floor(rng() * free.length)].item = true;
     }

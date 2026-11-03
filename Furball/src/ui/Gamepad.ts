@@ -1,8 +1,10 @@
 import { Facing } from '../objects/Player';
 
 // Controle físico (Gamepad API, layout padrão: Xbox/Android/Retroid Pocket).
-// Analógico esquerdo ou direcional: andar. Analógico direito ou A/B/X/Y: atirar (como no Isaac).
-// L1/L2: bomba. R1/R2: item usável. Start: início. Nos menus: direcional + A confirma, B volta.
+// Analógico esquerdo ou direcional: andar. Analógico direito: mirar e atirar.
+// A: atirar para onde o gato olha · B: bomba · X: item usável · Y: abrir/fechar o mapa.
+// Segunda opção: L1 atirar · R1 bomba · L2 item · R2 mapa. Start: início.
+// Nos menus: direcional + A confirma, B volta.
 
 export const BTN = {
   A: 0, // baixo
@@ -59,12 +61,25 @@ export class PadInput {
     return Math.hypot(x, y) > DEAD ? { x, y } : { x: 0, y: 0 };
   }
 
-  /** Direção do tiro: A/B/X/Y ou analógico direito. */
+  /** Botão de atirar (A ou L1) seguro: atira para onde o gato está olhando. */
+  get fireHeld() {
+    return this.down(BTN.A) || this.down(BTN.L1);
+  }
+
+  get bombPressed() {
+    return this.pressed(BTN.B) || this.pressed(BTN.R1);
+  }
+
+  get itemPressed() {
+    return this.pressed(BTN.X) || this.pressed(BTN.L2);
+  }
+
+  get mapPressed() {
+    return this.pressed(BTN.Y) || this.pressed(BTN.R2);
+  }
+
+  /** Direção do tiro pelo analógico direito. */
   get aim(): Facing | null {
-    if (this.down(BTN.Y)) return 'up';
-    if (this.down(BTN.A)) return 'down';
-    if (this.down(BTN.X)) return 'left';
-    if (this.down(BTN.B)) return 'right';
     const x = this.axes[2] ?? 0;
     const y = this.axes[3] ?? 0;
     if (Math.hypot(x, y) < 0.5) return null;

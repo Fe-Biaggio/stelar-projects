@@ -12,12 +12,22 @@ pelo celular (Remote Control): mande prints com SendUserFile.
   https://claude.ai/artifact/6K96NXayqtfjv1uhSQq6Mp): `npm run build`, depois
   `python tools/artifact_page.py`, e publicar `dist/furball.html` com cada arquivo de
   `dist/assets/` em `files` (remover o `index-*.js` antigo com `null`).
+- Versão pública: https://fe-biaggio.github.io/stelar-projects/ (GitHub Pages; o workflow
+  `.github/workflows/furball-pages.yml` na raiz publica a cada push no `main`).
 - Commits: sempre em `main`, com push, mensagem "Furball: …". Atualize `PENDENCIAS.md` e o
   README a cada etapa. Não commite os notebooks nem `Aula 04/` (não são deste projeto).
 
 ## Arquitetura (src/)
 
-- `scenes/`: Preload → Title (modo dev/jogo) → Select (gato) → Room. `RoomScene.ts` é a cena
+- Multiplayer (`net/`): PeerJS; quem hospeda roda o jogo e manda a imagem das cenas
+  (`mirror.ts`, objetos com `__owner` só vão para o dono, `__local` não vão); os outros rodam
+  `MirrorScene` e mandam comandos. `session.ts` (lado do anfitrião), `peer.ts` (conexão, salas
+  públicas `furball-v1-pub-N`, privadas por código). Telas: Multi/Create/Browse
+  (`MultiScenes.ts`) → `LobbyScene` → Room (co-op) ou várias `Room@x,y` (VS, `vsDirector.ts`).
+  Para testar no navegador: `window.furballDev` (net, session, vs, lobbyConfig, joinRoom) e um
+  iframe com o jogo como segundo jogador na mesma aba.
+- `RoomScene` tem vários gatos (`slots`, cada um com Player, HUD e mapa); `run.players`.
+- `scenes/`: Preload → Title (modo dev/jogo/multiplayer) → Select (gato) → Room. `RoomScene.ts` é a cena
   principal (grande): salas, combate, HUD, bombas, baús, loja, minimapa, botões de teste.
 - `run.ts`: estado da partida (`Run`: modo, status, vida em pontos, inventário, item usável,
   nível, mapa, portas abertas/rachadas, estado de cada sala). Troca de sala = `scene.restart`

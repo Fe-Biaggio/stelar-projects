@@ -1,7 +1,8 @@
 import Phaser from 'phaser';
 import { FLOOR, GAME_HEIGHT, GAME_WIDTH, ROOM_COLS, ROOM_ROWS, TILE, WALL } from '../config';
 import { CatId, PLAYABLE } from '../cats';
-import { ITEMS, ItemId, randomItemOf } from '../items';
+import { ITEMS, ItemId, ItemInfo, applyItem, randomItemOf } from '../items';
+import { SfxName, playSfx, sfx } from '../audio/sfx';
 import { Bomb } from '../objects/Bomb';
 import { Chest } from '../objects/Chest';
 import { BOSS_BY_LEVEL, Enemy, EnemyKind, EnemyShot } from '../objects/Enemy';
@@ -12,16 +13,21 @@ import { Pickup } from '../objects/Pickup';
 import { Vendor } from '../objects/Vendor';
 import { Npc } from '../objects/Npc';
 import { Facing, Player } from '../objects/Player';
-import { HEART_POINTS, PICKUP_FRAME, PickupKind, addPickup, isHeart, useKey } from '../pickups';
+import { HEART_POINTS, PickupKind, addPickup, isHeart, useKey } from '../pickups';
 import { RARITY_INFO, RARITY_ORDER, rarityOdds, rollRarity } from '../rarity';
-import { GameMode, MAX_LEVEL, RoomId, RoomState, Run, newRun, startNextLevel } from '../run';
+import { GameMode, MAX_LEVEL, PlayerState, RoomId, RoomState, Run, newRun, startNextLevel } from '../run';
 import { STAT_LABELS, Stats, formatMult } from '../stats';
 import { BTN, PadInput } from '../ui/Gamepad';
+import { Hud, markOwner } from '../ui/Hud';
+import { MapView } from '../ui/MapView';
 import { TouchControls, isTouchDevice } from '../ui/TouchControls';
 import { drawScorch, playExplosion } from '../world/explosion';
 import { priceOf, rollShopItems } from '../shop';
 import { RoomDef, doorKey, neighbors } from '../world/floor';
 import { DOOR_POS, DoorSide, drawBossDoorMark, drawDoorBars, drawDoorCracks, drawLockedDoor, drawRoom, drawTrapdoor } from '../world/room';
+import { net } from '../net/peer';
+import { ViewerMeta, session } from '../net/session';
+import { returnToLobby, vs } from './vsDirector';
 import {
   Prop,
   blocksWalk,
@@ -36,6 +42,8 @@ import {
 
 type MoveKeys = Record<'w' | 'a' | 's' | 'd', Phaser.Input.Keyboard.Key>;
 type AimKeys = Record<Facing, Phaser.Input.Keyboard.Key>;
+
+void blocksWalk;
 
 // Espinhos no chão da sala inicial, para testar a vida (coluna, linha em tiles do chão).
 const SPIKES: [number, number][] = [
@@ -96,11 +104,6 @@ const BOMB_DAMAGE_ENEMY = 10;
 const ENEMY_DAMAGE = 1;
 /** Quanto o dano dos inimigos cresce a cada nível (0,5x). */
 const ENEMY_DAMAGE_PER_LEVEL = 0.5;
-
-// Corações no HUD: quantos por linha e o espaçamento.
-const HEARTS_PER_ROW = 8;
-const HEART_GAP = 34;
-const HEART_ROW_H = 30;
 
 // Recompensa ao limpar uma sala comum (peso de cada coletável; "none" = nada).
 const CLEAR_DROPS: [PickupKind | 'none', number][] = [
@@ -168,7 +171,7 @@ const DROP_SPOTS: [number, number][] = [
   [0, 130],
 ];
 
-interface RoomData {
+export interface RoomData {
   cat?: CatId;
   mode?: GameMode;
   run?: Run;
@@ -179,6 +182,24 @@ interface RoomData {
   newLevel?: boolean;
 }
 
+/** Um gato dentro da sala (no multiplayer há vários; os remotos são comandados pela rede). */
+export interface Slot {
+  ps: PlayerState;
+  player?: Player;
+  local: boolean;
+  /** 0 = chão, 1 = em cima da cadeira, 2 = em cima da mesa. */
+  height: number;
+  move: Phaser.Math.Vector2;
+  aim: Facing | null;
+  /** Direção travada enquanto o botão de atirar (A) está seguro. */
+  fireDir: Facing | null;
+  hud: Hud;
+  map?: MapView;
+  colliders: Phaser.Physics.Arcade.Collider[];
+  /** Tela de "você foi eliminado" (VS). */
+  outShown?: boolean;
+}
+
 function weightedPick<T>(list: [T, number][]): T {
   let r = Math.random() * list.reduce((sum, [, w]) => sum + w, 0);
   for (const [v, w] of list) {
@@ -187,9 +208,20 @@ function weightedPick<T>(list: [T, number][]): T {
   return list[list.length - 1][0];
 }
 
+/** Sorteio com "mais drops": a chance de vir algo é multiplicada por `mult` (até 100%). */
+function rollDrop<T>(list: [T | 'none', number][], mult: number): T | 'none' {
+  if (mult === 1) return weightedPick(list);
+  const total = list.reduce((s, [, w]) => s + w, 0);
+  const some = list.filter(([v]) => v !== 'none') as [T, number][];
+  const pSome = Math.min(1, (some.reduce((s, [, w]) => s + w, 0) / total) * mult);
+  return Math.random() < pSome ? weightedPick(some) : 'none';
+}
+
 export class RoomScene extends Phaser.Scene {
-  private run!: Run;
-  private roomId: RoomId = '0,0';
+  run!: Run;
+  roomId: RoomId = '0,0';
+  /** Definição da sala (guardada: no VS a sala pode ser destruída enquanto a cena fecha). */
+  def!: RoomDef;
   private enterFrom?: DoorSide;
   private newLevel = false;
   private enemies: Enemy[] = [];
@@ -201,28 +233,18 @@ export class RoomScene extends Phaser.Scene {
   /** Repor a sala de obstáculos: põe as bombas de teste de novo depois de recarregar a sala. */
   private devBombsOnRestart = false;
   private propObjs: PropObj[] = [];
-  /** Slot do item usável no HUD. */
-  private activeHud?: {
-    box: Phaser.GameObjects.Rectangle;
-    icon: Phaser.GameObjects.Image;
-    bar: Phaser.GameObjects.Rectangle;
-    label: Phaser.GameObjects.Text;
-  };
-  /** 0 = chão, 1 = em cima da cadeira, 2 = em cima da mesa. */
-  private playerHeight = 0;
   /** Inimigos que já soltaram o que tinham ao morrer. */
   private dropped = new Set<Enemy>();
-  /** O jogo acabou com vitória: a sala para, mas os botões de recomeçar continuam. */
+  /** O jogo acabou (vitória ou fim): a sala para, mas os botões de recomeçar continuam. */
   private finished = false;
   private bossBar?: { fill: Phaser.GameObjects.Rectangle; boss: Enemy; parts: Phaser.GameObjects.GameObject[] };
-  private player!: Player;
+  readonly slots: Slot[] = [];
   private dummy?: DummyCat;
   private chest?: Chest;
   private moveKeys!: MoveKeys;
   private aimKeys!: AimKeys;
   private furballs: Furball[] = [];
   private spikeRects: Phaser.Geom.Rectangle[] = [];
-  private hearts: Phaser.GameObjects.Image[] = [];
   private items: ItemPickup[] = [];
   private pickups: Pickup[] = [];
   private bombs: Bomb[] = [];
@@ -234,26 +256,25 @@ export class RoomScene extends Phaser.Scene {
   /** Desenhos das portas trancadas desta sala, por lado. */
   private locks = new Map<DoorSide, Phaser.GameObjects.Graphics>();
   private cracks = new Map<DoorSide, Phaser.GameObjects.Graphics>();
+  /** Portas que levam a salas destruídas (VS): ficam gradeadas. */
+  private sealed = new Set<DoorSide>();
   /** Evita repetir o aviso de "precisa de chave/moedas" a cada quadro. */
   private nagUntil = 0;
   /** Depois de destrancar, espera um pouco antes de deixar passar pela porta. */
   private doorPauseUntil = 0;
-  private counters = new Map<PickupKind, Phaser.GameObjects.Text>();
-  private counterIcons = new Map<PickupKind, Phaser.GameObjects.Image>();
-  private heartRows = 1;
-  private goldenKeyIcon?: Phaser.GameObjects.Image;
   private statTexts = new Map<string, Phaser.GameObjects.Text>();
   private banner?: Phaser.GameObjects.Container;
   private hint?: Phaser.GameObjects.Text;
   private leaving = false;
-  private readonly move = new Phaser.Math.Vector2();
+  /** VS: tempo, lista de gatos vivos e aviso de sala condenada. */
+  private vsTimer?: Phaser.GameObjects.Text;
+  private aliveList: Phaser.GameObjects.GameObject[] = [];
+  private doomText?: Phaser.GameObjects.Text;
+  /** VS: esta sala foi destruída (a cena fecha em seguida). */
+  doomed = false;
 
-  constructor() {
-    super('Room');
-  }
-
-  private get cat() {
-    return this.run.cat;
+  constructor(key = 'Room') {
+    super(key);
   }
 
   private get roomState(): RoomState {
@@ -261,11 +282,42 @@ export class RoomScene extends Phaser.Scene {
   }
 
   private get roomDef(): RoomDef {
-    return this.run.floor.rooms[this.roomId];
+    return this.def;
   }
 
   private get isDev() {
     return this.run.mode === 'dev';
+  }
+
+  private get isVs() {
+    return this.run.mode === 'vs';
+  }
+
+  private get isMulti() {
+    return this.run.mode === 'coop' || this.run.mode === 'vs';
+  }
+
+  private get hs() {
+    return session.host;
+  }
+
+  /** Gato deste aparelho, se estiver nesta sala. */
+  private get localSlot() {
+    return this.slots.find((s) => s.local);
+  }
+
+  /** Primeiro gato (o modo dev e alguns sorteios usam ele). */
+  private get mainPs() {
+    return this.run.players[0];
+  }
+
+  /** Sorte usada nos sorteios da sala: a maior entre os gatos. */
+  private get luck() {
+    return Math.max(...this.run.players.map((p) => p.stats.luck));
+  }
+
+  private get alivePlayers() {
+    return this.slots.filter((s) => s.player && !s.player.dead);
   }
 
   /** Salas vizinhas desta sala, por lado da porta. */
@@ -273,9 +325,13 @@ export class RoomScene extends Phaser.Scene {
     return neighbors(this.run.floor, this.roomId);
   }
 
+  private get level() {
+    return this.isVs ? (this.def.bossLevel ?? 1) : this.run.level;
+  }
+
   /** Multiplicador de dano dos inimigos: 1x no nível 1, +0,5x a cada nível (1; 1,5; 2; ...). */
   private get enemyDamageMult() {
-    return 1 + ENEMY_DAMAGE_PER_LEVEL * (this.run.level - 1);
+    return 1 + ENEMY_DAMAGE_PER_LEVEL * (this.level - 1);
   }
 
   /**
@@ -284,6 +340,11 @@ export class RoomScene extends Phaser.Scene {
    */
   private get enemyDamage() {
     return Math.max(1, Math.floor(ENEMY_DAMAGE * this.enemyDamageMult));
+  }
+
+  /** Co-op com itens individuais: 1,5x mais drops. */
+  private get dropMult() {
+    return this.run.mode === 'coop' && !this.run.sharedItems ? 1.5 : 1;
   }
 
   /** Ainda há inimigos vivos (as portas ficam fechadas). */
@@ -295,6 +356,7 @@ export class RoomScene extends Phaser.Scene {
   init(data: RoomData) {
     this.run = data.run ?? newRun(data.cat ?? 'black', data.mode ?? 'dev');
     this.roomId = data.room && this.run.floor.rooms[data.room] ? data.room : this.run.floor.startId;
+    this.def = this.run.floor.rooms[this.roomId];
     this.enterFrom = data.enterFrom;
     this.newLevel = !!data.newLevel;
   }
@@ -302,15 +364,14 @@ export class RoomScene extends Phaser.Scene {
   create() {
     this.leaving = false;
     this.finished = false;
+    this.doomed = false;
     this.propObjs = [];
-    this.activeHud = undefined;
-    this.playerHeight = 0;
     this.dropped.clear();
     this.furballs = [];
     this.spikeRects = [];
     this.items = [];
     this.pickups = [];
-    this.hearts = [];
+    this.slots.length = 0;
     this.banner = undefined;
     this.dummy = undefined;
     this.chest = undefined;
@@ -325,9 +386,16 @@ export class RoomScene extends Phaser.Scene {
     this.bossBar = undefined;
     this.locks.clear();
     this.cracks.clear();
+    this.sealed.clear();
+    this.statTexts.clear();
+    this.aliveList = [];
+    this.vsTimer = undefined;
+    this.doomText = undefined;
+    this.touch = undefined;
     this.nagUntil = 0;
     this.doorPauseUntil = 0;
-    createFurballTexture(this, this.cat);
+    for (const p of this.run.players) createFurballTexture(this, p.cat);
+    this._doorsAtStart = new Set(Object.keys(this.doors) as DoorSide[]);
     drawRoom(this, Object.keys(this.doors) as DoorSide[]);
     this.physics.world.setBounds(FLOOR.x, FLOOR.y, FLOOR.width, FLOOR.height);
 
@@ -353,22 +421,22 @@ export class RoomScene extends Phaser.Scene {
       this.chest = new Chest(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 20, !!this.roomState.chestOpen, this.roomDef.chest);
     } else if (this.roomDef.item && firstVisit) {
       // Sala com item de graça no meio (sorteado pela sorte), guardado como item no chão
-      const id = randomItemOf(rollRarity(this.run.stats.luck));
+      const id = randomItemOf(rollRarity(this.luck));
       this.roomState.items.push({ id, x: GAME_WIDTH / 2, y: GAME_HEIGHT / 2 + 30 });
     } else if (this.roomDef.npc) {
       // Gatinho pedinte ou vampiro (sala sem inimigos)
       const state = (this.roomState.npc ??= { given: 0, gone: false });
       if (!state.gone) this.npc = new Npc(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 20, this.roomDef.npc);
       if (type === 'devNpc' && (firstVisit || this.devBombsOnRestart)) this.addDevNpcSupplies();
-    } else if (type === 'boss' && this.roomState.cleared) {
+    } else if (type === 'boss' && this.roomState.cleared && !this.isVs) {
       this.placeTrapdoor(false);
     } else if (type === 'shop') {
-      // O vendedor é um gato diferente do que você escolheu
-      const vendorCat = PLAYABLE.find((c) => c !== this.cat && c !== 'black') ?? 'orange';
+      // O vendedor é um gato diferente dos que estão jogando
+      const vendorCat = PLAYABLE.find((c) => c !== 'black' && !this.run.players.some((p) => p.cat === c)) ?? 'orange';
       this.vendor = new Vendor(this, GAME_WIDTH / 2, FLOOR.y + 120, vendorCat);
       if (firstVisit) this.stockShop();
     }
-    // Itens que ficaram no chão da última vez que o gato esteve aqui
+    // Itens que ficaram no chão da última vez que alguém esteve aqui
     for (const it of this.roomState.items) {
       this.items.push(new ItemPickup(this, it.x, it.y, it.id, { kind: 'none' }, it.price));
     }
@@ -377,48 +445,56 @@ export class RoomScene extends Phaser.Scene {
     if ((firstVisit || this.devBombsOnRestart) && type === 'devProps') this.addDevBombs();
     this.devBombsOnRestart = false;
 
-    const spawn = this.spawnPoint();
-    this.player = new Player(this, spawn.x, spawn.y, this.cat, this.run.stats, this.run.hp, this.run.shield, spawn.facing);
-    if (this.dummy) this.physics.add.collider(this.player.body, this.dummy.body);
-    if (this.chest) this.physics.add.collider(this.player.body, this.chest.body, () => this.tryOpenChest());
-    if (this.vendor) this.physics.add.collider(this.player.body, this.vendor.body);
-    if (this.npc) this.physics.add.collider(this.player.body, this.npc.body, () => this.touchNpc());
-    this.player.on('hp', () => this.updateHearts(true));
-    this.player.on('stats', (stats: Stats) => this.updateStats(stats));
-    this.player.loadActive(this.run.active);
-    this.player.on('active', () => this.updateActiveHud(true));
-    this.player.on('dead', () => this.showGameOver());
-
-    // Salas com inimigos: fecha as portas até limpar
-    this.addPropColliders();
-    const peaceful = !!this.roomDef.npc; // sala de gatinho (como a loja) não tem inimigos
-    if ((type === 'normal' || type === 'boss' || type === 'devProps') && !this.roomState.cleared && !peaceful) this.spawnEnemies(spawn);
-
+    // Controles do teclado (só valem para o gato deste aparelho)
     const kb = this.input.keyboard!;
     const K = Phaser.Input.Keyboard.KeyCodes;
     this.moveKeys = kb.addKeys({ w: K.W, a: K.A, s: K.S, d: K.D }) as MoveKeys;
     this.aimKeys = kb.addKeys({ up: K.UP, down: K.DOWN, left: K.LEFT, right: K.RIGHT }) as AimKeys;
-    kb.addCapture([K.UP, K.DOWN, K.LEFT, K.RIGHT]); // não rolar a página com as setas
-    kb.on('keydown-ESC', () => this.backToSelect());
-    kb.on('keydown-E', () => this.placeBomb());
-    kb.on('keydown-SPACE', () => this.useActive());
-    kb.on('keydown-Q', () => this.useActive());
-    kb.addCapture([K.SPACE]);
-    this.touch = isTouchDevice(this)
-      ? new TouchControls(this, () => this.placeBomb(), () => this.useActive())
-      : undefined;
+    kb.addCapture([K.UP, K.DOWN, K.LEFT, K.RIGHT, K.SPACE]);
+    kb.on('keydown-ESC', () => this.isViewedHere && this.backToSelect());
+    kb.on('keydown-E', () => this.localSlot && this.placeBomb(this.localSlot));
+    kb.on('keydown-SPACE', () => this.localSlot && this.useActive(this.localSlot));
+    kb.on('keydown-Q', () => this.localSlot && this.useActive(this.localSlot));
+    kb.on('keydown-M', () => this.localSlot?.map?.toggle());
+    kb.on('keydown-TAB', () => this.localSlot?.map?.toggle());
 
-    this.createHud();
+    // Sons: toca aqui (se esta sala está na tela) e manda para quem está olhando de longe
+    this.events.on('sfx', (name: SfxName) => {
+      if (this.isViewedHere) playSfx(name);
+      this.hs?.sfx(this, name);
+    });
+    this.cameras.main.on(Phaser.Cameras.Scene2D.Events.SHAKE_START, (_c: unknown, _e: unknown, d: number, i: number) =>
+      this.hs?.shake(this, d, i),
+    );
+
+    // Os gatos
+    if (this.isVs) {
+      for (const e of vs.director?.takePending(this.roomId) ?? []) this.addSlot(e.ps, e.enterFrom, e.bigMap);
+    } else {
+      const spawnable = this.run.players.filter((p) => !this.hs?.gone.has(p.idx));
+      spawnable.forEach((ps) => this.addSlot(ps, this.enterFrom));
+    }
+
+    // Salas com inimigos: fecha as portas até limpar
+    const peaceful = !!this.roomDef.npc || type === 'start'; // gatinho, loja e início não têm inimigos
+    const first = this.slots[0]?.player;
+    const from = first ? first.feet : { x: GAME_WIDTH / 2, y: GAME_HEIGHT / 2 };
+    if ((type === 'normal' || type === 'boss' || type === 'devProps') && !this.roomState.cleared && !peaceful) this.spawnEnemies(from);
+
+    this.createTopButtons();
+    if (this.isDev) this.createStatsPanel();
+    if (this.isVs) this.createVsHud();
 
     if (this.newLevel) {
       const mult = this.enemyDamageMult.toFixed(1).replace('.', ',');
-      this.time.delayedCall(250, () =>
-        this.showBanner(`Nível ${this.run.level} de ${MAX_LEVEL}`, `Mais inimigos · dano deles ${mult}x`, '#f2c879'),
-      );
+      this.time.delayedCall(250, () => {
+        this.showBanner(`Nível ${this.run.level} de ${MAX_LEVEL}`, `Mais inimigos · dano deles ${mult}x`, '#f2c879');
+        sfx(this, 'level');
+      });
     }
-    if (!this.enterFrom && !this.newLevel) {
+    if (!this.enterFrom && !this.newLevel && !this.isMulti) {
       this.hint = this.add
-        .text(GAME_WIDTH / 2, GAME_HEIGHT - WALL - 28, this.touch ? 'Esquerda: andar  ·  direita: atirar e bomba' : 'WASD andar  ·  setas atirar  ·  E bomba', {
+        .text(GAME_WIDTH / 2, GAME_HEIGHT - WALL - 28, this.touch ? 'Esquerda: andar  ·  direita: atirar e bomba' : 'WASD andar  ·  setas atirar  ·  E bomba  ·  M mapa', {
           fontFamily: 'monospace',
           fontSize: '18px',
           color: '#e8d9c4',
@@ -433,56 +509,256 @@ export class RoomScene extends Phaser.Scene {
     if (this.game.renderer.type === Phaser.WEBGL) {
       this.cameras.main.postFX.addVignette(0.5, 0.5, 0.95, 0.3);
     }
-    if (this.enterFrom) this.cameras.main.fadeIn(180);
+    if (this.enterFrom && !this.isVs) this.cameras.main.fadeIn(180);
+
+    // Quem está longe passa a ver esta sala
+    if (this.hs && !this.isVs) for (const s of this.slots) if (!s.local) this.hs.viewing.set(s.ps.idx, this);
+    if (this.isVs) vs.director?.sceneReady(this);
+    if (this.hs && !this.isVs) {
+      // Jogador remoto que sai da partida no meio: o gato dele cai
+      const onLeft = (idx: number) => {
+        const slot = this.slots.find((s) => s.ps.idx === idx);
+        slot?.player?.kill();
+      };
+      this.hs.events.on('left', onLeft);
+      this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.hs?.events.off('left', onLeft));
+    }
+  }
+
+  /** Esta sala está na tela deste aparelho? (no VS várias salas rodam ao mesmo tempo) */
+  get isViewedHere() {
+    return !this.isVs || vs.director?.localScene === this;
+  }
+
+  // ---------- Gatos na sala ----------
+
+  /** Coloca um gato na sala (entrando pela porta `enterFrom`, ou no começo). */
+  addSlot(ps: PlayerState, enterFrom?: DoorSide, bigMap = false) {
+    const local = !this.hs || ps.idx === net.myIdx;
+    if (local && !this.touch && isTouchDevice(this)) {
+      this.touch = new TouchControls(
+        this,
+        () => this.localSlot && this.placeBomb(this.localSlot),
+        () => this.localSlot && this.useActive(this.localSlot),
+      );
+      this.touch.markLocal();
+    }
+    const slot: Slot = {
+      ps,
+      local,
+      height: 0,
+      move: new Phaser.Math.Vector2(),
+      aim: null,
+      fireDir: null,
+      hud: undefined as unknown as Hud,
+      colliders: [],
+    };
+    this.slots.push(slot);
+    if (ps.alive) {
+      const order = this.slots.filter((s) => s.player).length;
+      slot.player = this.makePlayer(slot, this.spawnPoint(enterFrom, order));
+    }
+    slot.hud = new Hud(this, ps, () => slot.player, local, local ? this.touch : undefined);
+    if (!this.isDev) {
+      slot.map = new MapView(this, this.run, ps, () => this.roomId, local, () => slot.map?.toggle());
+      if (bigMap) slot.map.setBig(true);
+    }
+    if (this.isVs) {
+      ps.room = this.roomId;
+      ps.seen ??= [];
+      if (!ps.seen.includes(this.roomId)) ps.seen.push(this.roomId);
+      slot.map?.draw();
+    }
+    return slot;
+  }
+
+  /** Tira o gato da sala (VS: ele foi para outra sala). Guarda a vida e o item dele. */
+  removeSlot(slot: Slot) {
+    this.saveSlot(slot);
+    for (const c of slot.colliders) c.destroy();
+    slot.player?.destroy();
+    slot.player = undefined;
+    const i = this.slots.indexOf(slot);
+    if (i >= 0) this.slots.splice(i, 1);
+    // HUD e mapa dele: some daqui
+    const owned = (o: Phaser.GameObjects.GameObject) => (o as unknown as { __owner?: number }).__owner === slot.ps.idx;
+    for (const o of [...this.children.list]) if (owned(o)) o.destroy();
+    if (slot.local && this.touch) {
+      this.touch.destroy();
+      this.touch = undefined;
+    }
+  }
+
+  private makePlayer(slot: Slot, spawn: { x: number; y: number; facing: Facing }) {
+    const ps = slot.ps;
+    const player = new Player(this, spawn.x, spawn.y, ps.cat, ps.stats, ps.hp, ps.shield, spawn.facing);
+    const col = (c: Phaser.Physics.Arcade.Collider) => slot.colliders.push(c);
+    if (this.dummy) col(this.physics.add.collider(player.body, this.dummy.body));
+    if (this.chest) col(this.physics.add.collider(player.body, this.chest.body, () => this.tryOpenChest(slot)));
+    if (this.vendor) col(this.physics.add.collider(player.body, this.vendor.body));
+    if (this.npc) col(this.physics.add.collider(player.body, this.npc.body, () => this.touchNpc(slot)));
+    for (const bomb of this.bombs) {
+      const c = this.physics.add.collider(player.body, bomb.body, undefined, () => bomb.solid);
+      bomb.colliders.push(c);
+      col(c);
+    }
+    this.addPropColliders(slot, player);
+    player.on('hp', () => slot.hud?.updateHearts(true));
+    player.on('hurt', () => sfx(this, 'hurt'));
+    player.on('stats', (stats: Stats) => slot.local && this.updateStats(stats));
+    player.loadActive(ps.active);
+    player.on('active', () => slot.hud?.updateActiveHud(true));
+    player.on('dead', () => this.onPlayerDead(slot));
+    return player;
   }
 
   /** Onde o gato aparece: na porta por onde entrou, ou embaixo do centro no começo. */
-  private spawnPoint(): { x: number; y: number; facing: Facing } {
+  private spawnPoint(enterFrom: DoorSide | undefined, order = 0): { x: number; y: number; facing: Facing } {
     const cy = GAME_HEIGHT / 2 + 10;
-    switch (this.enterFrom) {
+    // Vários gatos entrando juntos ficam lado a lado
+    const off = order === 0 ? 0 : (order % 2 ? 1 : -1) * Math.ceil(order / 2) * 46;
+    switch (enterFrom) {
       case 'left':
-        return { x: FLOOR.x + 36, y: cy, facing: 'right' };
+        return { x: FLOOR.x + 36, y: cy + off, facing: 'right' };
       case 'right':
-        return { x: FLOOR.x + FLOOR.width - 36, y: cy, facing: 'left' };
+        return { x: FLOOR.x + FLOOR.width - 36, y: cy + off, facing: 'left' };
       case 'up':
-        return { x: GAME_WIDTH / 2, y: FLOOR.y + 40, facing: 'down' };
+        return { x: GAME_WIDTH / 2 + off, y: FLOOR.y + 40, facing: 'down' };
       case 'down':
-        return { x: GAME_WIDTH / 2, y: FLOOR.y + FLOOR.height - 20, facing: 'up' };
+        return { x: GAME_WIDTH / 2 + off, y: FLOOR.y + FLOOR.height - 20, facing: 'up' };
       default:
-        return { x: GAME_WIDTH / 2, y: GAME_HEIGHT / 2 + TILE * 2.5, facing: 'down' };
+        return { x: GAME_WIDTH / 2 + off, y: GAME_HEIGHT / 2 + TILE * 2.5, facing: 'down' };
     }
   }
 
-  update(time: number, deltaMs: number) {
-    if (this.leaving || this.finished) return;
-    // Limita o passo para a física não dar saltos se a aba ficar em segundo plano.
-    const dt = Math.min(deltaMs, 50) / 1000;
+  /** Um gato caiu. Solo: fim de jogo. Co-op: volta quando o outro limpar uma sala. VS: eliminado. */
+  private onPlayerDead(slot: Slot) {
+    sfx(this, 'die');
+    slot.ps.alive = false;
+    slot.ps.hp = 0;
+    slot.ps.shield = 0;
+    if (this.isVs) {
+      vs.director?.onDeath(slot.ps.idx);
+      this.showEliminated(slot);
+      return;
+    }
+    if (this.run.mode === 'coop') {
+      if (this.run.players.every((p) => !p.alive)) {
+        this.showGameOver();
+        return;
+      }
+      this.showBanner(`${slot.ps.name} caiu!`, 'Limpe uma sala para trazer de volta', '#c8c0b8');
+      return;
+    }
+    this.showGameOver();
+  }
 
+  /** Co-op: quem caiu volta com meio coração quando o outro limpa uma sala. */
+  private reviveFallen() {
+    if (this.run.mode !== 'coop') return;
+    for (const slot of this.slots) {
+      if (slot.ps.alive || this.hs?.gone.has(slot.ps.idx)) continue;
+      slot.ps.alive = true;
+      slot.ps.hp = 1;
+      slot.ps.shield = 0;
+      const old = slot.player;
+      const x = old ? old.feet.x : GAME_WIDTH / 2;
+      const y = old ? old.feet.y : GAME_HEIGHT / 2 + 40;
+      for (const c of slot.colliders) c.destroy();
+      slot.colliders = [];
+      old?.destroy();
+      slot.player = this.makePlayer(slot, { x, y, facing: 'down' });
+      slot.hud.updateHearts(true);
+      this.showBanner(`${slot.ps.name} voltou!`, 'Com meio coração', '#f2c879');
+      sfx(this, 'power');
+    }
+  }
+
+  // ---------- Comandos ----------
+
+  /** Lê teclado, controle e toque para o gato deste aparelho. */
+  private readLocalInput() {
+    const slot = this.localSlot;
+    if (!slot) return;
+    const move = slot.move;
     const k = this.moveKeys;
-    this.move.set((k.d.isDown ? 1 : 0) - (k.a.isDown ? 1 : 0), (k.s.isDown ? 1 : 0) - (k.w.isDown ? 1 : 0));
-    // Controle físico: analógico/direcional anda, A/B/X/Y atira, L bomba, R item, Start início
+    move.set((k.d.isDown ? 1 : 0) - (k.a.isDown ? 1 : 0), (k.s.isDown ? 1 : 0) - (k.w.isDown ? 1 : 0));
+    // Controle físico: analógico/direcional anda, analógico direito mira; A atira, B bomba, X item, Y mapa
     this.pad.poll();
     if (this.pad.used && this.touch) this.touch.hide();
     const padMove = this.pad.move;
-    if (padMove.x || padMove.y) this.move.set(padMove.x, padMove.y);
-    if (this.pad.pressed(BTN.L1) || this.pad.pressed(BTN.L2)) this.placeBomb();
-    if (this.pad.pressed(BTN.R1) || this.pad.pressed(BTN.R2)) this.useActive();
+    if (padMove.x || padMove.y) move.set(padMove.x, padMove.y);
+    if (this.pad.bombPressed) this.placeBomb(slot);
+    if (this.pad.itemPressed) this.useActive(slot);
+    if (this.pad.mapPressed) slot.map?.toggle();
     if (this.pad.pressed(BTN.START)) this.backToSelect();
-    if (this.touch && this.touch.move.lengthSq() > 0) this.move.copy(this.touch.move);
+    if (this.touch && this.touch.move.lengthSq() > 0) move.copy(this.touch.move);
     const aim = this.currentAim() ?? this.pad.aim ?? this.touch?.aim ?? null;
+    slot.aim = this.resolveFire(slot, aim, this.pad.fireHeld);
+  }
 
-    if (this.hint && (this.move.lengthSq() > 0 || aim)) {
-      const hint = this.hint;
-      this.hint = undefined;
-      this.tweens.add({ targets: hint, alpha: 0, duration: 800, delay: 2000, onComplete: () => hint.destroy() });
+  /** Comandos que chegaram pela rede para os outros gatos. */
+  private readRemoteInputs() {
+    const hs = this.hs;
+    if (!hs) return;
+    for (const slot of this.slots) {
+      if (slot.local) continue;
+      const inp = hs.input(slot.ps.idx);
+      if (!inp) continue;
+      slot.move.set(inp.mx, inp.my);
+      const acts = hs.takeActions(slot.ps.idx);
+      if (acts.bomb) this.placeBomb(slot);
+      if (acts.item) this.useActive(slot);
+      if (acts.map) slot.map?.toggle();
+      slot.aim = this.resolveFire(slot, inp.aim, inp.fire);
+    }
+  }
+
+  /** Mira pelas setas/analógico; sem mira, o botão de atirar usa a direção para onde o gato olha. */
+  private resolveFire(slot: Slot, aim: Facing | null, fireHeld: boolean): Facing | null {
+    if (aim) {
+      slot.fireDir = null;
+      return aim;
+    }
+    if (!fireHeld) {
+      slot.fireDir = null;
+      return null;
+    }
+    slot.fireDir ??= slot.player?.facingDir ?? 'down';
+    return slot.fireDir;
+  }
+
+  update(time: number, deltaMs: number) {
+    if (this.leaving || this.finished) {
+      this.hs?.pump(this);
+      return;
+    }
+    // Limita o passo para a física não dar saltos se a aba ficar em segundo plano.
+    const dt = Math.min(deltaMs, 50) / 1000;
+
+    this.readLocalInput();
+    this.readRemoteInputs();
+
+    if (this.hint) {
+      const s = this.localSlot;
+      if (s && (s.move.lengthSq() > 0 || s.aim)) {
+        const hint = this.hint;
+        this.hint = undefined;
+        this.tweens.add({ targets: hint, alpha: 0, duration: 800, delay: 2000, onComplete: () => hint.destroy() });
+      }
     }
 
-    this.updateElevation();
-    const shot = this.player.update(this.move, aim, dt, time);
-    if (shot) {
-      this.furballs.push(
-        new Furball(this, this.cat, shot.x, shot.y, shot.dir, shot.height, shot.inherited, shot.stats),
-      );
+    for (const slot of this.slots) {
+      const player = slot.player;
+      if (!player) continue;
+      this.updateElevation(slot);
+      const shot = player.update(slot.move, slot.aim, dt, time);
+      if (shot) {
+        const f = new Furball(this, slot.ps.cat, shot.x, shot.y, shot.dir, shot.height, shot.inherited, shot.stats);
+        f.owner = slot.ps.idx;
+        this.furballs.push(f);
+        sfx(this, 'shoot');
+      }
     }
 
     for (const f of this.furballs) {
@@ -492,6 +768,7 @@ export class RoomScene extends Phaser.Scene {
         const d = f.direction;
         f.burst();
         this.dummy.takeHit(d.x, d.y, f.damage);
+        sfx(this, 'hit');
         if (this.showDamage) this.showDamageNumber(this.dummy.x, this.dummy.y - 70, f.damage);
       }
       // Pedras seguram a bola de pelo
@@ -501,7 +778,19 @@ export class RoomScene extends Phaser.Scene {
         const d = f.direction;
         f.burst();
         e.takeHit(d.x, d.y, f.damage);
+        sfx(this, 'hit');
         if (this.showDamage) this.showDamageNumber(e.x, e.y - 50, f.damage);
+      }
+      // VS: a bola de pelo acerta os outros gatos
+      if (this.isVs && !f.dead) {
+        for (const s of this.slots) {
+          const p = s.player;
+          if (!p || p.dead || s.ps.idx === f.owner) continue;
+          if (Phaser.Math.Distance.Between(x, y, p.feet.x, p.feet.y - 18) > 26 + f.hitRadius) continue;
+          f.burst();
+          p.takeDamage(Math.max(1, Math.floor(f.damage)), x, y);
+          break;
+        }
       }
     }
     this.dummy?.update(time);
@@ -510,31 +799,53 @@ export class RoomScene extends Phaser.Scene {
     this.updateEnemies(dt, time);
     this.furballs = this.furballs.filter((f) => !f.dead);
 
-    this.checkSpikes();
+    for (const slot of this.slots) this.checkSpikes(slot);
     this.checkItems(time);
     this.checkPickups(time);
     this.updateBombs(dt, time);
-    if (this.player.active && this.player.activeCharge < 1) this.updateActiveHud(false);
+    for (const slot of this.slots) {
+      const p = slot.player;
+      if (p?.active && p.activeCharge < 1) slot.hud.updateActiveHud(false);
+      slot.map?.tick(dt);
+    }
     this.checkTrapdoor();
-    this.checkDoors();
+    for (const slot of [...this.slots]) this.checkDoors(slot);
+    if (this.isVs) this.updateVsHud();
+    this.hs?.pump(this);
+  }
+
+  /** O que a tela remota de um jogador precisa (item usável e onde fica o mapa). */
+  viewerMeta(idx: number): ViewerMeta | null {
+    const slot = this.slots.find((s) => s.ps.idx === idx);
+    const p = slot?.player;
+    const b = slot?.map?.bounds;
+    return {
+      a: [p?.active ? p.active.frame : -1, (p?.activeCharge ?? 0) >= 1],
+      mb: b ? [b.x, b.y, b.width, b.height] : [0, 0, 0, 0],
+      alive: !!p && !p.dead,
+    };
   }
 
   // ---------- Inimigos ----------
 
   /** Coloca os inimigos longe de onde o gato entrou e fecha as portas. */
   private spawnEnemies(from: { x: number; y: number }) {
-    const level = this.run.level;
+    const level = this.level;
     if (this.roomDef.type === 'boss') {
       const bossType = BOSS_BY_LEVEL[Math.min(level, BOSS_BY_LEVEL.length) - 1];
       const boss = new Enemy(this, GAME_WIDTH / 2, FLOOR.y + 150, 'boss', level, bossType);
       this.enemies.push(boss);
       this.createBossBar(boss);
+      this.time.delayedCall(300, () => sfx(this, 'boss'));
     } else {
-      // 2 a 4 inimigos no nível 1, e mais um a cada nível (até 8)
+      // 2 a 4 inimigos no nível 1, e mais um a cada nível (até 8). No co-op, o dobro.
+      const coop = this.run.mode === 'coop' ? 2 : 1;
       const kinds: EnemyKind[] =
         this.roomDef.type === 'devProps'
           ? ['fly', 'pale'] // teste: um que voa (alcança a mesa) e um de chão (não alcança)
-          : Array.from({ length: Math.min(2 + Math.floor(Math.random() * 3) + (level - 1), 8) }, () => weightedPick(ENEMY_POOL));
+          : Array.from({ length: Math.min((2 + Math.floor(Math.random() * 3) + (level - 1)) * coop, 8 * coop) }, () =>
+              weightedPick(ENEMY_POOL),
+            );
       const count = kinds.length;
       const placed: { x: number; y: number }[] = [];
       for (let i = 0; i < count; i++) {
@@ -544,7 +855,7 @@ export class RoomScene extends Phaser.Scene {
           x = Phaser.Math.Between(FLOOR.x + 70, FLOOR.x + FLOOR.width - 70);
           y = Phaser.Math.Between(FLOOR.y + 70, FLOOR.y + FLOOR.height - 50);
           const farFromCat = Phaser.Math.Distance.Between(x, y, from.x, from.y) > 260;
-          const apart = placed.every((p) => Phaser.Math.Distance.Between(x, y, p.x, p.y) > 80);
+          const apart = placed.every((p) => Phaser.Math.Distance.Between(x, y, p.x, p.y) > (coop > 1 ? 60 : 80));
           if (farFromCat && apart && !this.propAt(x, y) && !this.propAt(x, y - 40)) break;
         }
         placed.push({ x, y });
@@ -566,41 +877,59 @@ export class RoomScene extends Phaser.Scene {
 
   private updateEnemies(dt: number, time: number) {
     if (!this.enemies.length) return;
-    const feet = this.player.feet;
-    const world = {
-      target: feet,
-      shoot: (x: number, y: number, vx: number, vy: number, flying: boolean) =>
-        this.enemyShots.push(new EnemyShot(this, x, y, vx, vy, flying)),
+    const alive = this.alivePlayers;
+    const nearest = (x: number, y: number) => {
+      let best = alive[0]?.player?.feet ?? { x: GAME_WIDTH / 2, y: GAME_HEIGHT / 2 };
+      let bd = Infinity;
+      for (const s of alive) {
+        const f = s.player!.feet;
+        const d = Phaser.Math.Distance.Between(x, y, f.x, f.y);
+        if (d < bd) {
+          bd = d;
+          best = f;
+        }
+      }
+      return best;
     };
+    const shoot = (x: number, y: number, vx: number, vy: number, flying: boolean) =>
+      this.enemyShots.push(new EnemyShot(this, x, y, vx, vy, flying));
     for (const e of this.enemies) {
-      e.update(dt, time, world);
+      e.update(dt, time, { target: nearest(e.x, e.y), shoot });
       // Encostar em qualquer inimigo (boss incluído) tira 1 de vida: meio coração
       // Em cima da mesa, só quem voa alcança o gato
-      const reachable = this.playerHeight < 2 || e.flies;
-      if (!e.dead && !e.spawning && !this.player.dead && reachable) {
+      if (e.dead || e.spawning) continue;
+      for (const s of alive) {
+        const p = s.player!;
+        if (p.dead || !(s.height < 2 || e.flies)) continue;
+        const feet = p.feet;
         if (Phaser.Math.Distance.Between(feet.x, feet.y - 8, e.x, e.body.center.y) < e.radius + 14) {
-          this.player.takeDamage(this.enemyDamage, e.x, e.y);
+          p.takeDamage(this.enemyDamage, e.x, e.y);
         }
       }
     }
     for (const shot of this.enemyShots) {
       shot.update(dt);
-      const shotReaches = this.playerHeight < 2 || shot.fromFlyer;
-      if (!shot.dead && !this.player.dead && shotReaches && Phaser.Math.Distance.Between(shot.x, shot.y, feet.x, feet.y) < 20) {
-        shot.burst();
-        this.player.takeDamage(this.enemyDamage, shot.x, shot.y);
+      for (const s of alive) {
+        const p = s.player!;
+        if (shot.dead || p.dead || !(s.height < 2 || shot.fromFlyer)) continue;
+        const feet = p.feet;
+        if (Phaser.Math.Distance.Between(shot.x, shot.y, feet.x, feet.y) < 20) {
+          shot.burst();
+          p.takeDamage(this.enemyDamage, shot.x, shot.y);
+        }
       }
     }
     this.enemyShots = this.enemyShots.filter((s) => !s.dead);
     if (this.bossBar) {
       const { boss, fill } = this.bossBar;
-      fill.width = 396 * Math.max(boss.hp, 0) / boss.maxHp;
+      fill.width = (396 * Math.max(boss.hp, 0)) / boss.maxHp;
     }
 
     for (const e of this.enemies) {
-      if (e.dead && e.kind !== 'boss' && !this.dropped.has(e)) {
+      if (e.dead && !this.dropped.has(e)) {
         this.dropped.add(e);
-        this.enemyDrop(e.x, e.y);
+        sfx(this, 'enemyDie');
+        if (e.kind !== 'boss') this.enemyDrop(e.x, e.y);
       }
     }
     const wasFighting = this.enemies.length > 0;
@@ -617,26 +946,31 @@ export class RoomScene extends Phaser.Scene {
       this.tweens.add({ targets: g, alpha: 0, duration: 300, onComplete: () => g.destroy() });
       this.bars.delete(side);
     }
+    sfx(this, 'door');
+    this.reviveFallen();
     const cx = GAME_WIDTH / 2;
     const cy = GAME_HEIGHT / 2 + 30;
     if (this.roomDef.type === 'boss') {
       this.bossName = this.bossBar?.boss.name ?? 'Boss';
       this.bossBar?.parts.forEach((p) => p.destroy());
       this.bossBar = undefined;
-      if (this.run.level >= MAX_LEVEL) {
+      if (!this.isVs && this.run.level >= MAX_LEVEL) {
         // Último nível: fim de jogo com vitória
         this.time.delayedCall(1200, () => this.showVictory());
         return;
       }
-      this.showBanner(`${this.bossName} derrotado!`, 'Desça pelo alçapão para o próximo nível', '#f2c879');
-      this.placeTrapdoor(true);
+      if (this.isVs) this.showBanner(`${this.bossName} derrotado!`, 'Pegue o prêmio', '#f2c879');
+      else {
+        this.showBanner(`${this.bossName} derrotado!`, 'Desça pelo alçapão para o próximo nível', '#f2c879');
+        this.placeTrapdoor(true);
+      }
       // Prêmio do boss: um item (a sorte ajuda) e um coração
-      const id = randomItemOf(rollRarity(this.run.stats.luck));
+      const id = randomItemOf(rollRarity(this.luck));
       this.items.push(new ItemPickup(this, cx - 110, cy + 40, id, { kind: 'toss', fromX: cx, fromY: FLOOR.y + 120 }));
       this.pickups.push(new Pickup(this, cx + 110, cy + 40, 'heart', true));
       return;
     }
-    const drop = weightedPick(CLEAR_DROPS);
+    const drop = rollDrop(CLEAR_DROPS, this.dropMult);
     if (drop !== 'none') {
       const spot = this.freeDropSpot(cx, cy + (this.chest ? 70 : 0));
       this.pickups.push(new Pickup(this, spot.x, spot.y, drop, true));
@@ -645,11 +979,11 @@ export class RoomScene extends Phaser.Scene {
 
   /** Sorteio do que um inimigo solta ao morrer: moeda 50%, chave/bomba 10%, item 5%. */
   private enemyDrop(x: number, y: number) {
-    const drop = weightedPick(ENEMY_DROPS);
+    const drop = rollDrop(ENEMY_DROPS, this.dropMult);
     if (drop === 'none') return;
     const spot = this.freeFloorSpot(x, y);
     if (drop === 'item') {
-      const id = randomItemOf(rollRarity(this.run.stats.luck));
+      const id = randomItemOf(rollRarity(this.luck));
       this.items.push(new ItemPickup(this, spot.x, spot.y, id, { kind: 'pop' }));
     } else {
       this.pickups.push(new Pickup(this, spot.x, spot.y, drop, true));
@@ -694,14 +1028,14 @@ export class RoomScene extends Phaser.Scene {
   }
 
   /** Colisões do gato: pedras e buracos sempre; a mesa só quando ele está no chão. */
-  private addPropColliders() {
+  private addPropColliders(slot: Slot, player: Player) {
     for (const o of this.propObjs) {
       const p = o.prop;
       if (!o.body || p.kind === 'chair') continue;
       if (p.kind === 'table') {
-        this.physics.add.collider(this.player.body, o.body, undefined, () => !p.broken && this.playerHeight === 0);
+        slot.colliders.push(this.physics.add.collider(player.body, o.body, undefined, () => !p.broken && slot.height === 0));
       } else {
-        this.physics.add.collider(this.player.body, o.body, undefined, () => !p.broken);
+        slot.colliders.push(this.physics.add.collider(player.body, o.body, undefined, () => !p.broken));
       }
     }
   }
@@ -721,15 +1055,16 @@ export class RoomScene extends Phaser.Scene {
    * Em cima de quê o gato está: cadeira (sobe direto do chão) ou mesa (só vindo da cadeira ou
    * já em cima dela). Ajusta a altura do desenho para ele aparecer em cima do móvel.
    */
-  private updateElevation() {
-    const feet = this.player.feet;
+  private updateElevation(slot: Slot) {
+    const player = slot.player!;
+    const feet = player.feet;
     const under = this.propAt(feet.x, feet.y - 8);
     let h = 0;
     if (under?.kind === 'chair') h = 1;
-    else if (under?.kind === 'table' && this.playerHeight >= 1) h = 2;
-    this.playerHeight = h;
+    else if (under?.kind === 'table' && slot.height >= 1) h = 2;
+    slot.height = h;
     const bottom = under ? propRect(under).y + TILE + 2 : 0;
-    this.player.setElevation(h === 1 ? CHAIR_LIFT : h === 2 ? TABLE_LIFT : 0, h ? bottom : 0);
+    player.setElevation(h === 1 ? CHAIR_LIFT : h === 2 ? TABLE_LIFT : 0, h ? bottom : 0);
   }
 
   /** Ponto livre mais perto de (x, y) para soltar algo no chão (fora de pedras, buracos e móveis). */
@@ -774,13 +1109,17 @@ export class RoomScene extends Phaser.Scene {
     this.trapdoor = { x, y };
   }
 
-  /** Pisar no alçapão leva ao próximo nível (mapa novo; a chave dourada é perdida). */
+  /** Pisar no alçapão leva ao próximo nível (todos os gatos juntos; a chave dourada é perdida). */
   private checkTrapdoor() {
-    if (!this.trapdoor || this.leaving || this.player.dead) return;
-    const feet = this.player.feet;
-    if (Phaser.Math.Distance.Between(feet.x, feet.y, this.trapdoor.x, this.trapdoor.y) > 30) return;
+    if (!this.trapdoor || this.leaving) return;
+    const on = this.alivePlayers.some((s) => {
+      const feet = s.player!.feet;
+      return Phaser.Math.Distance.Between(feet.x, feet.y, this.trapdoor!.x, this.trapdoor!.y) <= 30;
+    });
+    if (!on) return;
     this.leaving = true;
     this.saveRoom();
+    sfx(this, 'level');
     this.cameras.main.fadeOut(400);
     this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
       // Só agora troca o mapa: a sala antiga não pode mais mexer no estado do nível novo
@@ -791,21 +1130,24 @@ export class RoomScene extends Phaser.Scene {
   }
 
   /** Se o gato está empurrando uma porta aberta, vai para a sala do outro lado. */
-  private checkDoors() {
-    if (this.player.dead || this.inCombat) return;
-    const b = this.player.body;
-    const feet = this.player.feet;
+  private checkDoors(slot: Slot) {
+    const player = slot.player;
+    if (!player || player.dead || this.inCombat || this.leaving) return;
+    const b = player.body;
+    const feet = player.feet;
+    const move = slot.move;
     const midY = Math.abs(feet.y - 10 - GAME_HEIGHT / 2) < 30;
     const midX = Math.abs(feet.x - GAME_WIDTH / 2) < 30;
     const pushing: Record<DoorSide, boolean> = {
-      right: midY && this.move.x > 0 && b.right >= FLOOR.x + FLOOR.width - 1,
-      left: midY && this.move.x < 0 && b.left <= FLOOR.x + 1,
-      up: midX && this.move.y < 0 && b.top <= FLOOR.y + 1,
-      down: midX && this.move.y > 0 && b.bottom >= FLOOR.y + FLOOR.height - 1,
+      right: midY && move.x > 0 && b.right >= FLOOR.x + FLOOR.width - 1,
+      left: midY && move.x < 0 && b.left <= FLOOR.x + 1,
+      up: midX && move.y < 0 && b.top <= FLOOR.y + 1,
+      down: midX && move.y > 0 && b.bottom >= FLOOR.y + FLOOR.height - 1,
     };
     for (const [side, target] of Object.entries(this.doors) as [DoorSide, RoomId][]) {
       if (!pushing[side] || this.time.now < this.doorPauseUntil) continue;
-      if (this.isLocked(side)) this.tryUnlock(side);
+      if (this.isLocked(side)) this.tryUnlock(slot, side);
+      else if (this.isVs) vs.director?.transfer(this, slot, target, OPPOSITE[side]);
       else this.goToRoom(target, OPPOSITE[side]);
       return;
     }
@@ -820,16 +1162,18 @@ export class RoomScene extends Phaser.Scene {
   }
 
   /** Gasta uma chave (ou usa a dourada) para destrancar a porta. */
-  private tryUnlock(side: DoorSide) {
+  private tryUnlock(slot: Slot, side: DoorSide) {
     if (this.time.now < this.nagUntil) return;
-    const usedGolden = this.run.inventory.goldenKey;
-    if (!useKey(this.run.inventory)) {
+    const inv = slot.ps.inventory;
+    const usedGolden = inv.goldenKey;
+    if (!useKey(inv)) {
       this.nagUntil = this.time.now + 1500;
       this.showBanner('Trancada', 'Precisa de uma chave', '#c8c0b8');
+      sfx(this, 'locked');
       this.cameras.main.shake(80, 0.003);
       return;
     }
-    this.updateCounters(usedGolden ? undefined : 'key');
+    this.refreshCounters(usedGolden ? undefined : 'key');
     this.unlockDoor(side);
   }
 
@@ -841,6 +1185,7 @@ export class RoomScene extends Phaser.Scene {
     }
     this.locks.delete(side);
     this.cracks.delete(side);
+    sfx(this, 'unlock');
     this.doorPauseUntil = this.time.now + 450; // dá tempo de ver a porta abrindo antes de passar
   }
 
@@ -860,9 +1205,11 @@ export class RoomScene extends Phaser.Scene {
     this.showBanner('Porta rachada', 'Mais uma bomba e ela abre', '#c8c0b8');
   }
 
+  /** Todos os gatos vão juntos para a sala ao lado. */
   private goToRoom(room: RoomId, enterFrom: DoorSide) {
     this.leaving = true;
     this.saveRoom();
+    sfx(this, 'door');
     this.cameras.main.fadeOut(150);
     this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
       const data: RoomData = { run: this.run, room, enterFrom };
@@ -870,43 +1217,51 @@ export class RoomScene extends Phaser.Scene {
     });
   }
 
-  /** Guarda na partida o que precisa continuar igual quando o gato voltar. */
-  private saveRoom() {
-    this.run.hp = this.player.hp;
-    this.run.shield = this.player.shield;
-    this.run.active = this.player.active ? { id: this.player.active.id, charge: this.player.activeCharge } : undefined;
+  /** Guarda na partida a vida e o item usável do gato. */
+  private saveSlot(slot: Slot) {
+    const p = slot.player;
+    if (!p) return;
+    slot.ps.hp = p.hp;
+    slot.ps.shield = p.shield;
+    slot.ps.active = p.active ? { id: p.active.id, charge: p.activeCharge } : undefined;
+  }
+
+  /** Guarda na partida o que precisa continuar igual quando alguém voltar. */
+  saveRoom() {
+    for (const slot of this.slots) this.saveSlot(slot);
     this.roomState.items = this.items.filter((i) => !i.collected).map((i) => ({ id: i.info.id, x: i.x, y: i.y, price: i.price }));
     this.roomState.pickups = this.pickups.filter((p) => !p.collected).map((p) => ({ kind: p.kind, x: p.x, y: p.y, tag: p.tag }));
     if (this.chest) this.roomState.chestOpen = this.chest.opened;
+    // VS: sala que ninguém limpou volta com inimigos novos; a já limpa fica limpa
   }
 
-  /** Abre o baú e sorteia um item pela sorte do gato. */
-  /** O baú é trancado: gasta uma chave (ou usa a dourada) para abrir. */
-  private tryOpenChest() {
+  /** O baú dourado é trancado: gasta uma chave (ou usa a dourada) para abrir. */
+  private tryOpenChest(slot: Slot) {
     if (!this.chest || this.chest.opened || this.time.now < this.nagUntil) return;
     if (this.chest.variant === 'wood') {
       this.openWoodChest();
       return;
     }
-    const usedGolden = this.run.inventory.goldenKey;
-    if (!useKey(this.run.inventory)) {
+    const inv = slot.ps.inventory;
+    const usedGolden = inv.goldenKey;
+    if (!useKey(inv)) {
       this.nagUntil = this.time.now + 1500;
       this.showBanner('Baú trancado', 'Precisa de uma chave', '#c8c0b8');
+      sfx(this, 'locked');
       return;
     }
-    if (!usedGolden) this.updateCounters('key');
-    this.openChest();
+    if (!usedGolden) this.refreshCounters('key');
+    this.openChest(1, slot.ps.stats.luck);
   }
 
   /** Abre o baú dourado. Aberto com bomba (`factor` < 1), as chances de item bom caem. */
-  private openChest(factor = 1) {
+  private openChest(factor = 1, luck = this.luck) {
     if (!this.chest || !this.chest.open()) return;
-    const rarity = rollRarity(this.run.stats.luck, Math.random, factor);
+    sfx(this, 'chest');
+    const rarity = rollRarity(luck, Math.random, factor);
     const id = randomItemOf(rarity);
     const spot = this.freeDropSpot(this.chest.x, this.chest.y);
-    this.items.push(
-      new ItemPickup(this, spot.x, spot.y, id, { kind: 'toss', fromX: this.chest.x, fromY: this.chest.y - 30 }),
-    );
+    this.items.push(new ItemPickup(this, spot.x, spot.y, id, { kind: 'toss', fromX: this.chest.x, fromY: this.chest.y - 30 }));
     const info = RARITY_INFO[rarity];
     this.showBanner(`Item ${info.name.toLowerCase()}!`, ITEMS[id].name, info.color);
   }
@@ -914,15 +1269,16 @@ export class RoomScene extends Phaser.Scene {
   /** Baú de madeira: abre sem chave e solta 2 ou 3 coletáveis (às vezes um item). */
   private openWoodChest() {
     if (!this.chest || !this.chest.open()) return;
+    sfx(this, 'chest');
     const { x, y } = this.chest;
     const n = 2 + Math.floor(Math.random() * 2);
     for (let i = 0; i < n; i++) {
       const spot = this.freeDropSpot(x, y);
       this.pickups.push(new Pickup(this, spot.x, spot.y, weightedPick(WOOD_CHEST_DROPS), true));
     }
-    if (Math.random() < WOOD_CHEST_ITEM_CHANCE) {
+    if (Math.random() < WOOD_CHEST_ITEM_CHANCE * this.dropMult) {
       const spot = this.freeDropSpot(x, y);
-      const id = randomItemOf(rollRarity(this.run.stats.luck));
+      const id = randomItemOf(rollRarity(this.luck));
       this.items.push(new ItemPickup(this, spot.x, spot.y, id, { kind: 'toss', fromX: x, fromY: y - 30 }));
     }
   }
@@ -1000,14 +1356,22 @@ export class RoomScene extends Phaser.Scene {
   // ---------- Bombas ----------
 
   /** Coloca uma bomba nos pés do gato, se houver bombas no inventário. */
-  private placeBomb() {
-    if (this.leaving || this.player.dead || this.run.inventory.bombs <= 0) return;
-    this.run.inventory.bombs -= 1;
-    this.updateCounters('bomb');
-    const feet = this.player.feet;
+  private placeBomb(slot: Slot) {
+    const player = slot.player;
+    const inv = slot.ps.inventory;
+    if (this.leaving || this.finished || !player || player.dead || inv.bombs <= 0) return;
+    inv.bombs -= 1;
+    this.refreshCounters('bomb');
+    sfx(this, 'bombPlace');
+    const feet = player.feet;
     const bomb = new Bomb(this, feet.x, feet.y + 2, (b) => this.explode(b));
-    // O gato empurra a bomba, mas só depois de sair de cima dela.
-    bomb.colliders.push(this.physics.add.collider(this.player.body, bomb.body, undefined, () => bomb.solid));
+    // Os gatos empurram a bomba, mas só depois de sair de cima dela.
+    for (const s of this.slots) {
+      if (!s.player) continue;
+      const c = this.physics.add.collider(s.player.body, bomb.body, undefined, () => bomb.solid);
+      bomb.colliders.push(c);
+      s.colliders.push(c);
+    }
     if (this.dummy) bomb.colliders.push(this.physics.add.collider(bomb.body, this.dummy.body));
     for (const o of this.propObjs) {
       if (o.body) bomb.colliders.push(this.physics.add.collider(bomb.body, o.body, undefined, () => !o.prop.broken));
@@ -1023,7 +1387,7 @@ export class RoomScene extends Phaser.Scene {
 
   private updateBombs(dt: number, time: number) {
     for (const bomb of this.bombs) {
-      if (!bomb.solid && !this.physics.overlap(this.player.body, bomb.body)) bomb.solid = true;
+      if (!bomb.solid && !this.slots.some((s) => s.player && this.physics.overlap(s.player.body, bomb.body))) bomb.solid = true;
       bomb.update(dt, time);
     }
     this.bombs = this.bombs.filter((b) => !b.exploded);
@@ -1033,6 +1397,7 @@ export class RoomScene extends Phaser.Scene {
   private explode(bomb: Bomb) {
     const { x, y } = bomb;
     playExplosion(this, x, y);
+    sfx(this, 'explode');
     // Baú por perto: abre sem chave (o dourado fica com chances piores, até a metade)
     if (this.chest && !this.chest.opened && Phaser.Math.Distance.Between(x, y, this.chest.x, this.chest.y) < BLAST_RADIUS + 20) {
       if (this.chest.variant === 'wood') this.openWoodChest();
@@ -1042,7 +1407,6 @@ export class RoomScene extends Phaser.Scene {
     for (const side of Object.keys(this.doors) as DoorSide[]) {
       if (!this.isLocked(side)) continue;
       const d = DOOR_POS[side];
-      // Ponto da porta na beira do chão
       const ex = Phaser.Math.Clamp(d.x, FLOOR.x, FLOOR.x + FLOOR.width);
       const ey = Phaser.Math.Clamp(d.y, FLOOR.y, FLOOR.y + FLOOR.height);
       if (Phaser.Math.Distance.Between(x, y, ex, ey) < BLAST_RADIUS + 20) this.bombDoor(side);
@@ -1089,9 +1453,11 @@ export class RoomScene extends Phaser.Scene {
       if (Phaser.Math.Distance.Between(x, y, other.x, other.y) < BLAST_RADIUS) other.shortenFuse();
     }
 
-    const feet = this.player.feet;
-    if (Phaser.Math.Distance.Between(x, y, feet.x, feet.y) < BLAST_RADIUS) {
-      this.player.takeDamage(BOMB_DAMAGE_PLAYER, x, y);
+    for (const s of this.slots) {
+      const p = s.player;
+      if (!p) continue;
+      const feet = p.feet;
+      if (Phaser.Math.Distance.Between(x, y, feet.x, feet.y) < BLAST_RADIUS) p.takeDamage(BOMB_DAMAGE_PLAYER, x, y);
     }
     for (const e of this.enemies) {
       if (e.dead || Phaser.Math.Distance.Between(x, y, e.x, e.y) > BLAST_RADIUS + e.radius) continue;
@@ -1106,23 +1472,33 @@ export class RoomScene extends Phaser.Scene {
     }
   }
 
+  /** Atualiza os contadores de todos os HUDs (no co-op o inventário é dividido). */
+  private refreshCounters(bump?: PickupKind) {
+    for (const s of this.slots) s.hud.updateCounters(bump);
+  }
+
   private checkPickups(time: number) {
-    const feet = this.player.feet;
     for (const p of this.pickups) {
       p.update(time);
-      if (this.player.dead || !p.touches(feet.x, feet.y)) continue;
-      // Coração vermelho com a vida cheia fica no chão, como no Isaac.
-      if ((p.kind === 'heart' || p.kind === 'halfHeart') && this.player.hp >= this.player.maxPoints) continue;
-      const target = this.counterPosition(p.kind);
-      p.collect(target.x, target.y, () => {
-        if (p.kind === 'blueHeart') this.player.addShield(HEART_POINTS.blueHeart!);
-        else if (isHeart(p.kind)) this.player.heal(HEART_POINTS[p.kind]!);
-        else {
-          addPickup(this.run.inventory, p.kind);
-          this.updateCounters(p.kind);
-        }
-      });
-      if (p.kind === 'goldenKey') this.showBanner('Chave dourada', 'Abre portas e baús sem gastar chaves neste nível', '#f2c879');
+      for (const slot of this.slots) {
+        const player = slot.player;
+        if (!player || player.dead || !p.touches(player.feet.x, player.feet.y)) continue;
+        // Coração vermelho com a vida cheia fica no chão, como no Isaac.
+        if ((p.kind === 'heart' || p.kind === 'halfHeart') && player.hp >= player.maxPoints) continue;
+        const target = slot.hud.counterPosition(p.kind);
+        const inv = slot.ps.inventory;
+        p.collect(target.x, target.y, () => {
+          if (p.kind === 'blueHeart') player.addShield(HEART_POINTS.blueHeart!);
+          else if (isHeart(p.kind)) player.heal(HEART_POINTS[p.kind]!);
+          else {
+            addPickup(inv, p.kind);
+            this.refreshCounters(p.kind);
+          }
+        });
+        sfx(this, p.kind === 'coin' ? 'coin' : isHeart(p.kind) ? 'heart' : 'pickup');
+        if (p.kind === 'goldenKey') this.showBanner('Chave dourada', 'Abre portas e baús sem gastar chaves neste nível', '#f2c879');
+        break;
+      }
     }
     this.pickups = this.pickups.filter((p) => !p.collected);
   }
@@ -1132,7 +1508,7 @@ export class RoomScene extends Phaser.Scene {
     const slots = [-1, 0, 1].map((i) => ({ x: GAME_WIDTH / 2 + i * SHOP_ITEM_GAP, y: SHOP_ITEM_Y }));
     const free = slots.filter((s) => !this.items.some((it) => !it.collected && it.x === s.x && it.y === s.y));
     const forSale = this.items.filter((it) => !it.collected).map((it) => it.info.id);
-    const ids = rollShopItems(this.run.stats.luck, free.length, forSale);
+    const ids = rollShopItems(this.luck, free.length, forSale);
     free.forEach((slot, i) => {
       const id = ids[i];
       this.items.push(new ItemPickup(this, slot.x, slot.y, id, animate ? { kind: 'pop' } : { kind: 'none' }, priceOf(id)));
@@ -1140,36 +1516,56 @@ export class RoomScene extends Phaser.Scene {
   }
 
   /** Compra um item da loja, se houver moedas. */
-  private tryBuy(item: ItemPickup) {
+  private tryBuy(slot: Slot, item: ItemPickup) {
     const price = item.price ?? 0;
-    if (this.run.inventory.coins < price) {
+    const inv = slot.ps.inventory;
+    if (inv.coins < price) {
       if (this.time.now >= this.nagUntil) {
         this.nagUntil = this.time.now + 1500;
-        this.vendor?.say(`Faltam ${price - this.run.inventory.coins} moedas!`);
+        this.vendor?.say(`Faltam ${price - inv.coins} moedas!`);
       }
       return false;
     }
-    this.run.inventory.coins -= price;
-    this.updateCounters('coin');
+    inv.coins -= price;
+    this.refreshCounters('coin');
     this.vendor?.say('Obrigado! Miau!', true);
+    sfx(this, 'coin');
     return true;
   }
 
   private checkItems(time: number) {
-    const feet = this.player.feet;
     for (const item of this.items) {
       item.update(time);
-      if (!this.player.dead && item.touches(feet.x, feet.y)) {
-        if (item.price !== undefined && !this.tryBuy(item)) continue;
+      for (const slot of this.slots) {
+        const player = slot.player;
+        if (!player || player.dead || item.collected || !item.touches(player.feet.x, player.feet.y)) continue;
+        if (item.price !== undefined && !this.tryBuy(slot, item)) continue;
+        const feet = player.feet;
         item.collect(feet.x, feet.y);
-        const old = this.player.collect(item.info);
+        const old = player.collect(item.info);
         // Trocou de item usável: o antigo fica no chão onde estava o novo
         if (old) this.items.push(new ItemPickup(this, item.x, item.y, old.id, { kind: 'drop' }));
+        // Co-op com itens compartilhados: o item vale para o outro gato também
+        if (this.run.mode === 'coop' && this.run.sharedItems && !item.info.active) this.shareItem(slot, item.info);
         const rarity = RARITY_INFO[item.info.rarity];
         this.showBanner(item.info.name, `${item.info.effect}  ·  ${rarity.name}`, rarity.color);
+        sfx(this, 'item');
+        break;
       }
     }
     this.items = this.items.filter((i) => !i.collected);
+  }
+
+  private shareItem(from: Slot, info: ItemInfo) {
+    for (const s of this.slots) {
+      if (s === from) continue;
+      if (s.player && !s.player.dead) s.player.collect(info);
+      else applyItem(s.ps.stats, info);
+    }
+    // Quem não está na sala (não acontece no co-op, mas por garantia)
+    for (const ps of this.run.players) {
+      if (!this.slots.some((s) => s.ps === ps) && ps !== from.ps) applyItem(ps.stats, info);
+    }
   }
 
   /** A seta pressionada por último manda, como no Isaac. */
@@ -1186,120 +1582,76 @@ export class RoomScene extends Phaser.Scene {
     return best;
   }
 
-  private checkSpikes() {
-    if (this.player.dead) return;
-    const feet = this.player.body;
+  private checkSpikes(slot: Slot) {
+    const player = slot.player;
+    if (!player || player.dead) return;
+    const feet = player.body;
     const feetRect = new Phaser.Geom.Rectangle(feet.x, feet.y, feet.width, feet.height);
     for (const r of this.spikeRects) {
       if (Phaser.Geom.Intersects.RectangleToRectangle(feetRect, r)) {
-        this.player.takeDamage(1, r.centerX, r.centerY);
+        player.takeDamage(1, r.centerX, r.centerY);
         return;
       }
     }
   }
 
-  // ---------- HUD ----------
-
-  private createHud() {
-    this.createCounters();
-    this.updateHearts(false);
-    this.createActiveHud();
-    this.createTopButtons();
-    if (this.isDev) this.createStatsPanel();
-    else this.createMinimap();
-  }
-
   // ---------- Item usável ----------
 
-  private useActive() {
+  private useActive(slot: Slot) {
     if (this.leaving || this.finished) return;
-    const item = this.player.active;
-    if (!item?.active) return;
-    if (!this.player.useActive()) {
+    const player = slot.player;
+    const item = player?.active;
+    if (!player || player.dead || !item?.active) return;
+    if (!player.useActive()) {
       if (this.time.now >= this.nagUntil) {
         this.nagUntil = this.time.now + 800;
         this.showBanner(item.name, 'Ainda recarregando…', '#c8c0b8');
       }
       return;
     }
+    sfx(this, 'power');
     const what = item.active.effect === 'invincible' ? 'Imortal' : 'Dano 2x';
     this.showBanner(item.name, `${what} por ${item.active.duration} segundos!`, '#f2c879');
-  }
-
-  /** Slot do item usável, embaixo dos contadores: ícone, barra de recarga e a tecla. */
-  private createActiveHud() {
-    const { x, y } = this.activeSlotPosition();
-    const box = this.add.rectangle(x, y, 44, 44, 0x120e0c, 0.7).setStrokeStyle(2, 0x8a7a6a).setDepth(20_000);
-    const icon = this.add.image(x, y - 1, 'actives', 0).setScale(0.58).setDepth(20_001);
-    const bar = this.add.rectangle(x - 20, y + 26, 40, 5, 0xf2c879).setOrigin(0, 0.5).setDepth(20_001);
-    const label = this.add
-      .text(x + 28, y, this.touch ? '' : 'Espaço', { fontFamily: 'monospace', fontSize: '11px', color: '#8a7a6a' })
-      .setOrigin(0, 0.5)
-      .setDepth(20_001);
-    this.activeHud = { box, icon, bar, label };
-    this.updateActiveHud(false);
-  }
-
-  private activeSlotPosition() {
-    const keyRow = this.counterPosition('key');
-    return { x: 48, y: keyRow.y + 42 };
-  }
-
-  private updateActiveHud(bump: boolean) {
-    const hud = this.activeHud;
-    if (!hud) return;
-    const item = this.player.active;
-    const visible = !!item;
-    for (const o of [hud.box, hud.icon, hud.bar, hud.label]) o.setVisible(visible);
-    this.touch?.setActive(item ? item.frame : null, this.player.activeCharge >= 1);
-    if (!item) return;
-    hud.icon.setFrame(item.frame);
-    const ready = this.player.activeCharge >= 1;
-    hud.bar.width = 40 * this.player.activeCharge;
-    hud.bar.setFillStyle(ready ? 0xf2c879 : 0x6a5a4a);
-    hud.icon.setAlpha(ready ? 1 : 0.5);
-    hud.box.setStrokeStyle(2, ready ? 0xf2c879 : 0x8a7a6a);
-    if (bump) {
-      hud.icon.setScale(0.8);
-      this.tweens.add({ targets: hud.icon, scale: 0.58, duration: 250, ease: 'Back.Out' });
-    }
   }
 
   // ---------- Gatinhos pedinte e vampiro ----------
 
   /** Encostar no gatinho: o pedinte recebe 1 moeda; o vampiro, 1 ponto de vida. */
-  private touchNpc() {
+  private touchNpc(slot: Slot) {
     const npc = this.npc;
-    if (!npc || npc.gone || this.player.dead || this.time.now < this.npcCooldownUntil) return;
+    const player = slot.player;
+    if (!npc || npc.gone || !player || player.dead || this.time.now < this.npcCooldownUntil) return;
     this.npcCooldownUntil = this.time.now + 700;
     const state = (this.roomState.npc ??= { given: 0, gone: false });
+    const inv = slot.ps.inventory;
     let chance: number;
     if (npc.kind === 'beggar') {
-      if (this.run.inventory.coins <= 0) {
+      if (inv.coins <= 0) {
         npc.say('Sem moedinha? Tudo bem…');
         return;
       }
-      this.run.inventory.coins -= 1;
-      this.updateCounters('coin');
+      inv.coins -= 1;
+      this.refreshCounters('coin');
       chance = BEGGAR_ITEM_CHANCE;
     } else {
       // Não deixa o gato morrer doando: precisa sobrar pelo menos meio coração
-      if (this.player.hp <= 1) {
+      if (player.hp <= 1) {
         npc.say('Você está fraquinho demais…');
         return;
       }
-      this.player.donateBlood(1);
-      this.run.bloodDonated += 1;
+      player.donateBlood(1);
+      slot.ps.bloodDonated += 1;
       chance = VAMPIRE_ITEM_CHANCE;
-      this.checkVampireReward();
+      this.checkVampireReward(slot);
     }
     npc.thank();
+    sfx(this, 'meow');
     if (Math.random() >= chance) {
       npc.say(npc.kind === 'beggar' ? 'Obrigado!' : 'Hmm… delícia.');
       return;
     }
     // Presente: item com as mesmas chances do baú (a sorte ajuda)
-    const id = randomItemOf(rollRarity(this.run.stats.luck));
+    const id = randomItemOf(rollRarity(slot.ps.stats.luck));
     const spot = this.freeDropSpot(npc.x, npc.y);
     this.items.push(new ItemPickup(this, spot.x, spot.y, id, { kind: 'toss', fromX: npc.x, fromY: npc.y - 40 }));
     state.given += 1;
@@ -1312,10 +1664,11 @@ export class RoomScene extends Phaser.Scene {
   }
 
   /** Doou 3 corações no total e ficou com meio coração: ganha a capa de vampiro (uma vez). */
-  private checkVampireReward() {
-    if (this.run.vampireReward || this.run.bloodDonated < VAMPIRE_REWARD_BLOOD || this.player.hp !== 1) return;
-    this.run.vampireReward = true;
-    const feet = this.player.feet;
+  private checkVampireReward(slot: Slot) {
+    const ps = slot.ps;
+    if (ps.vampireReward || ps.bloodDonated < VAMPIRE_REWARD_BLOOD || slot.player?.hp !== 1) return;
+    ps.vampireReward = true;
+    const feet = slot.player.feet;
     const spot = this.freeDropSpot(feet.x, feet.y - 40);
     this.items.push(new ItemPickup(this, spot.x, spot.y, 'vampire', { kind: 'pop' }));
     this.showBanner('Presente do vampiro!', 'Uma capa e dois dentinhos', '#c83040');
@@ -1338,101 +1691,7 @@ export class RoomScene extends Phaser.Scene {
     }
   }
 
-  /** Contadores de moedas, bombas e chaves embaixo dos corações (como no Isaac). */
-  private createCounters() {
-    this.counters.clear();
-    this.counterIcons.clear();
-    for (const kind of ['coin', 'bomb', 'key'] as PickupKind[]) {
-      const { x, y } = this.counterPosition(kind);
-      this.counterIcons.set(kind, this.add.image(x, y, 'pickups', PICKUP_FRAME[kind]).setScale(0.5).setDepth(20_000));
-      this.counters.set(
-        kind,
-        this.add
-          .text(x + 16, y, '', { fontFamily: 'monospace', fontSize: '16px', color: '#e8d9c4', stroke: '#1a1210', strokeThickness: 4 })
-          .setOrigin(0, 0.5)
-          .setDepth(20_000),
-      );
-    }
-    const keyPos = this.counterPosition('goldenKey');
-    this.goldenKeyIcon = this.add
-      .image(keyPos.x, keyPos.y, 'pickups', PICKUP_FRAME.goldenKey)
-      .setScale(0.5)
-      .setDepth(20_000);
-    this.updateCounters();
-  }
-
-  /**
-   * Para onde cada coletável voa no HUD. Moedas, bombas e chaves vão para o contador
-   * (a chave dourada fica ao lado das chaves); corações vão para o espaço que vão ocupar.
-   */
-  private counterPosition(kind: PickupKind): { x: number; y: number } {
-    const x = 38;
-    const top = 70 + (this.heartRows - 1) * HEART_ROW_H; // desce se houver mais linhas de corações
-    const gap = 24;
-    switch (kind) {
-      case 'coin':
-        return { x, y: top };
-      case 'bomb':
-        return { x, y: top + gap };
-      case 'key':
-        return { x, y: top + gap * 2 };
-      case 'goldenKey':
-        return { x, y: top + gap * 2 }; // no mesmo lugar da prateada
-      case 'blueHeart':
-        return this.heartSlot(this.player.stats.maxHp + Math.floor(this.player.shield / 2), true);
-      default:
-        return this.heartSlot(Math.min(Math.floor(this.player.hp / 2), this.player.stats.maxHp - 1), true);
-    }
-  }
-
-  /** Posição do coração número `i` no HUD (canto superior esquerdo, ou centro com `center`). */
-  private heartSlot(i: number, center = false) {
-    const x = 26 + (i % HEARTS_PER_ROW) * HEART_GAP;
-    const y = 22 + Math.floor(i / HEARTS_PER_ROW) * HEART_ROW_H;
-    return center ? { x: x + 16, y: y + 15 } : { x, y };
-  }
-
-  /** Reposiciona os contadores quando os corações ganham ou perdem uma linha. */
-  private layoutCounters() {
-    for (const kind of ['coin', 'bomb', 'key'] as PickupKind[]) {
-      const { x, y } = this.counterPosition(kind);
-      this.counterIcons.get(kind)?.setPosition(x, y);
-      this.counters.get(kind)?.setPosition(x + 16, y);
-    }
-    const g = this.counterPosition('goldenKey');
-    this.goldenKeyIcon?.setPosition(g.x, g.y);
-    if (this.activeHud) {
-      const { x, y } = this.activeSlotPosition();
-      this.activeHud.box.setPosition(x, y);
-      this.activeHud.icon.setPosition(x, y - 1);
-      this.activeHud.bar.setPosition(x - 20, y + 26);
-      this.activeHud.label.setPosition(x + 28, y);
-    }
-  }
-
-  private updateCounters(bump?: PickupKind) {
-    const inv = this.run.inventory;
-    const values: [PickupKind, number][] = [
-      ['coin', inv.coins],
-      ['bomb', inv.bombs],
-      ['key', inv.keys],
-    ];
-    for (const [kind, value] of values) {
-      const text = this.counters.get(kind)!;
-      text.setText(String(value).padStart(2, '0'));
-      if (bump === kind) {
-        text.setScale(1.4);
-        this.tweens.add({ targets: text, scale: 1, duration: 200, ease: 'Back.Out' });
-      }
-    }
-    // A chave dourada fica por cima da prateada no contador
-    this.goldenKeyIcon?.setVisible(inv.goldenKey);
-    this.counterIcons.get('key')?.setVisible(!inv.goldenKey);
-    if (bump === 'goldenKey' && this.goldenKeyIcon) {
-      this.goldenKeyIcon.setScale(1.3);
-      this.tweens.add({ targets: this.goldenKeyIcon, scale: 0.5, duration: 300, ease: 'Back.Out' });
-    }
-  }
+  // ---------- HUD ----------
 
   /** Painel pequeno com os status, abaixo do botão Início (para testes durante o desenvolvimento). */
   private createStatsPanel() {
@@ -1480,7 +1739,7 @@ export class RoomScene extends Phaser.Scene {
           .setDepth(40_001),
       );
     });
-    this.updateStats(this.player.stats, false);
+    this.updateStats(this.mainPs.stats, false);
   }
 
   private updateStats(stats: Stats, flash = true) {
@@ -1530,7 +1789,7 @@ export class RoomScene extends Phaser.Scene {
   }
 
   /** Faixa no topo com o nome do item e o efeito, como no Isaac. */
-  private showBanner(title: string, subtitle: string, color = '#f2c879') {
+  showBanner(title: string, subtitle: string, color = '#f2c879') {
     this.banner?.destroy();
     const style = { fontFamily: 'monospace', color: '#e8d9c4', stroke: '#1a1210' };
     const t1 = this.add.text(0, 0, title, { ...style, fontSize: '26px', strokeThickness: 6, color }).setOrigin(0.5);
@@ -1551,7 +1810,10 @@ export class RoomScene extends Phaser.Scene {
   /** Botões no topo, à direita: alternar números de dano, repor itens e voltar ao início. */
   private createTopButtons() {
     const y = 31;
-    this.makeButton(GAME_WIDTH - 20 - 66, y, 132, '↺ Início (Esc)', () => this.backToSelect());
+    // No multiplayer o botão é só de quem hospeda (os outros têm o próprio botão Sair)
+    const label = this.isMulti ? '↺ Sala (Esc)' : '↺ Início (Esc)';
+    const back = this.makeButton(GAME_WIDTH - 20 - 66, y, 132, label, () => this.backToSelect());
+    if (this.isMulti) markOwner(back.parentContainer!, net.myIdx);
     if (!this.isDev) return; // os botões de teste só existem no modo desenvolvedor
     const type = this.roomDef.type;
     const refill = type === 'treasure' ? '+ Novo baú' : type === 'shop' ? '+ Repor loja' : type === 'devNpc' ? '+ Repor gatinho' : '+ Repor itens';
@@ -1565,48 +1827,6 @@ export class RoomScene extends Phaser.Scene {
 
   private get showDamage(): boolean {
     return this.isDev && (this.registry.get('showDamage') ?? true);
-  }
-
-  /**
-   * Minimapa no canto superior direito (modo jogo): salas visitadas, vizinhas já vistas e os
-   * ícones do tesouro, da loja e do boss.
-   */
-  private createMinimap() {
-    const floor = this.run.floor;
-    const visited = new Set(Object.keys(this.run.rooms).filter((id) => floor.rooms[id]));
-    visited.add(this.roomId);
-    const known = new Set(visited);
-    for (const id of visited) for (const n of Object.values(neighbors(floor, id))) known.add(n!);
-    const rooms = [...known].map((id) => floor.rooms[id]);
-    const minX = Math.min(...rooms.map((r) => r.gx));
-    const maxX = Math.max(...rooms.map((r) => r.gx));
-    const minY = Math.min(...rooms.map((r) => r.gy));
-    const maxY = Math.max(...rooms.map((r) => r.gy));
-    const cw = 22;
-    const ch = 15;
-    const gap = 4;
-    const w = (maxX - minX + 1) * (cw + gap) + gap;
-    const h = (maxY - minY + 1) * (ch + gap) + gap;
-    const right = GAME_WIDTH - 20;
-    const top = 58;
-    const left = right - Math.max(w, 90);
-    const depth = 40_000;
-    this.add.rectangle(left - 6, top - 6, Math.max(w, 90) + 12, h + 30, 0x0c0907, 0.75).setOrigin(0, 0).setDepth(depth);
-    const g = this.add.graphics().setDepth(depth + 1);
-    for (const r of rooms) {
-      const x = left + gap + (r.gx - minX) * (cw + gap);
-      const y = top + gap + (r.gy - minY) * (ch + gap);
-      const color = r.id === this.roomId ? 0xf2e6cf : visited.has(r.id) ? 0x8a7a6a : 0x3a322e;
-      g.fillStyle(color).fillRoundedRect(x, y, cw, ch, 3);
-      const icon = r.type === 'treasure' ? 0xe2b13c : r.type === 'shop' ? 0x7ad67a : r.type === 'boss' ? 0xd8302a : 0;
-      if (icon) {
-        g.fillStyle(0x0c0907).fillCircle(x + cw / 2, y + ch / 2, 5);
-        g.fillStyle(icon).fillCircle(x + cw / 2, y + ch / 2, 4);
-      }
-    }
-    this.add
-      .text(left, top + h + 4, `Nível ${this.run.level}/${MAX_LEVEL}`, { fontFamily: 'monospace', fontSize: '12px', color: '#b8a898' })
-      .setDepth(depth + 1);
   }
 
   private damageLabel() {
@@ -1637,80 +1857,41 @@ export class RoomScene extends Phaser.Scene {
     return label;
   }
 
-  /** Volta para a tela de seleção, mantendo o gato atual pré-selecionado. */
+  /** Volta para a tela de seleção (no multiplayer, todos voltam para a sala de espera). */
   private backToSelect() {
+    if (this.isMulti) {
+      if (this.hs) returnToLobby(this.game);
+      return;
+    }
     if (this.leaving) return;
     this.leaving = true;
     this.cameras.main.fadeOut(200);
     this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () =>
-      this.scene.start('Select', { cat: this.cat, mode: this.run.mode }),
+      this.scene.start('Select', { cat: this.mainPs.cat, mode: this.run.mode }),
     );
   }
 
-  /**
-   * Desenha os corações: primeiro os vermelhos (cheio, metade ou vazio, 2 pontos cada),
-   * depois os azuis do escudo (cheio ou metade). Até 8 por linha.
-   */
-  private updateHearts(animate: boolean) {
-    const { hp, shield } = this.player;
-    const maxHp = this.player.stats.maxHp;
-    const frames: number[] = [];
-    for (let i = 0; i < maxHp; i++) {
-      // A vida pode ter frações (dano 1,5x): qualquer pedaço de coração aparece como metade
-      const pts = Phaser.Math.Clamp(hp - i * 2, 0, 2);
-      frames.push(pts >= 2 ? 0 : pts > 0 ? 2 : 1);
+  /** Recomeçar depois do fim: no multiplayer, volta todo mundo para a sala de espera. */
+  private restartGame() {
+    if (this.isMulti) {
+      returnToLobby(this.game);
+      return;
     }
-    for (let i = 0; i < Math.ceil(shield / 2 - 1e-9); i++) {
-      frames.push(shield - i * 2 >= 2 ? 3 : 4);
-    }
-
-    // Some com os corações que deixaram de existir (escudo perdido)
-    while (this.hearts.length > frames.length) {
-      const heart = this.hearts.pop()!;
-      if (animate) {
-        this.tweens.add({ targets: heart, scale: 0, alpha: 0, duration: 250, onComplete: () => heart.destroy() });
-      } else heart.destroy();
-    }
-    frames.forEach((frame, i) => {
-      let heart = this.hearts[i];
-      if (!heart) {
-        const pos = this.heartSlot(i);
-        heart = this.add.image(pos.x + 16, pos.y + 15, 'hearts', frame).setDepth(20_000);
-        if (animate) {
-          heart.setScale(0);
-          this.tweens.add({ targets: heart, scale: 1, duration: 300, ease: 'Back.Out' });
-        }
-        this.hearts.push(heart);
-        return;
-      }
-      const before = Number(heart.frame.name);
-      if (before === frame) return;
-      heart.setFrame(frame);
-      if (animate) {
-        // Pulsa mais forte quando perde vida, mais leve quando ganha
-        const lost = frame === 1 || (before === 0 && frame === 2) || (before === 3 && frame === 4);
-        heart.setScale(lost ? 1.5 : 1.25);
-        this.tweens.add({ targets: heart, scale: 1, duration: 250, ease: 'Back.Out' });
-      }
-    });
-
-    const rows = Math.max(1, Math.ceil(frames.length / HEARTS_PER_ROW));
-    if (rows !== this.heartRows) {
-      this.heartRows = rows;
-      this.layoutCounters();
-    }
+    const again: RoomData = { cat: this.mainPs.cat, mode: this.run.mode };
+    this.scene.restart(again);
   }
 
   /** Tela de vitória depois do boss do último nível. */
   private showVictory() {
-    this.finished = true; // o gato para; nada mais acontece na sala
-    this.player.body.velocity.set(0, 0);
+    this.finished = true; // os gatos param; nada mais acontece na sala
+    for (const s of this.slots) s.player?.body.velocity.set(0, 0);
+    sfx(this, 'victory');
     const cx = GAME_WIDTH / 2;
     const cy = GAME_HEIGHT / 2;
     const overlay = this.add.rectangle(cx, cy, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0).setDepth(30_000);
     const style = { fontFamily: 'monospace', color: '#e8d9c4', stroke: '#1a1210', strokeThickness: 6 };
     const title = this.add
-      .text(cx, cy - 40, 'Você venceu!', { ...style, fontSize: '52px', color: '#f2c879' })
+      .text(cx, cy - 40, this.isMulti ? 'Vocês venceram!' : 'Você venceu!', { ...style, fontSize: '52px', color: '#f2c879' })
       .setOrigin(0.5)
       .setAlpha(0)
       .setDepth(30_001);
@@ -1720,12 +1901,7 @@ export class RoomScene extends Phaser.Scene {
       .setAlpha(0)
       .setDepth(30_001);
     const sub = this.add
-      .text(cx, cy + 56, this.touch ? 'Toque para jogar de novo' : 'R para jogar de novo  ·  Esc para trocar de gato', {
-        ...style,
-        fontSize: '18px',
-        strokeThickness: 4,
-        color: '#b8a898',
-      })
+      .text(cx, cy + 56, this.restartHint(), { ...style, fontSize: '18px', strokeThickness: 4, color: '#b8a898' })
       .setOrigin(0.5)
       .setAlpha(0)
       .setDepth(30_001);
@@ -1733,13 +1909,21 @@ export class RoomScene extends Phaser.Scene {
     this.tweens.add({ targets: [title, detail, sub], alpha: 1, duration: 700, delay: 300 });
     title.setScale(0.6);
     this.tweens.add({ targets: title, scale: 1, duration: 700, delay: 300, ease: 'Back.Out' });
+    this.waitRestart(overlay);
+  }
 
-    const again: RoomData = { cat: this.cat, mode: this.run.mode };
-    this.input.keyboard!.once('keydown-R', () => this.scene.restart(again));
-    this.waitPadButton(() => this.scene.restart(again));
-    this.time.delayedCall(1000, () => {
+  private restartHint() {
+    if (this.isMulti) return this.touch ? 'Toque para voltar à sala de espera' : 'R ou A: voltar à sala de espera';
+    return this.touch ? 'Toque para jogar de novo' : 'R para jogar de novo  ·  Esc para trocar de gato';
+  }
+
+  /** R, A/Start no controle ou um toque recomeçam (no multiplayer, só quem hospeda). */
+  private waitRestart(overlay: Phaser.GameObjects.Rectangle) {
+    this.input.keyboard!.once('keydown-R', () => this.restartGame());
+    this.waitPadButton(() => this.restartGame());
+    this.time.delayedCall(900, () => {
       overlay.setInteractive();
-      overlay.once('pointerdown', () => this.scene.restart(again));
+      overlay.once('pointerdown', () => this.restartGame());
     });
   }
 
@@ -1761,6 +1945,8 @@ export class RoomScene extends Phaser.Scene {
   }
 
   private showGameOver() {
+    this.finished = this.isMulti; // no multiplayer a sala para (o anfitrião decide quando voltar)
+    sfx(this, 'defeat');
     const cx = GAME_WIDTH / 2;
     const cy = GAME_HEIGHT / 2;
     const overlay = this.add.rectangle(cx, cy, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0).setDepth(30_000);
@@ -1771,22 +1957,166 @@ export class RoomScene extends Phaser.Scene {
       .setAlpha(0)
       .setDepth(30_001);
     const sub = this.add
-      .text(cx, cy + 34, this.touch ? 'Toque para recomeçar' : 'R para recomeçar  ·  Esc para trocar de gato', { ...style, fontSize: '20px', strokeThickness: 4 })
+      .text(cx, cy + 34, this.restartHint(), { ...style, fontSize: '20px', strokeThickness: 4 })
       .setOrigin(0.5)
       .setAlpha(0)
       .setDepth(30_001);
     this.tweens.add({ targets: overlay, fillAlpha: 0.55, duration: 600, delay: 400 });
     this.tweens.add({ targets: [title, sub], alpha: 1, duration: 600, delay: 600 });
+    this.waitRestart(overlay);
+  }
 
-    const kb = this.input.keyboard!;
-    const restart: RoomData = { cat: this.cat, mode: this.run.mode };
-    kb.once('keydown-R', () => this.scene.restart(restart));
-    this.waitPadButton(() => this.scene.restart(restart));
-    // No celular: tocar na tela recomeça (o botão Início continua levando à seleção)
-    this.time.delayedCall(900, () => {
-      overlay.setInteractive();
-      overlay.once('pointerdown', () => this.scene.restart(restart));
-    });
+  // ---------- VS ----------
+
+  /** Tempo até o tabuleiro encolher (no topo) e a lista de gatos vivos (na lateral). */
+  private createVsHud() {
+    this.vsTimer = this.add
+      .text(GAME_WIDTH / 2, 18, '', { fontFamily: 'monospace', fontSize: '18px', color: '#e8d9c4', stroke: '#1a1210', strokeThickness: 4 })
+      .setOrigin(0.5, 0)
+      .setDepth(40_000);
+    this.drawAliveList();
+  }
+
+  /** Lista lateral: foto e nome de cada gato; quem caiu fica apagado e deitado. */
+  drawAliveList() {
+    for (const o of this.aliveList) o.destroy();
+    this.aliveList = [];
+    const x = 30;
+    let y = 392; // abaixo da porta da esquerda
+    for (const ps of this.run.players) {
+      const out = !ps.alive;
+      const face = this.add
+        .image(x, y, `cat_${ps.cat}`, 0)
+        .setScale(0.42)
+        .setDepth(40_000)
+        .setAngle(out ? 90 : 0)
+        .setAlpha(out ? 0.45 : 1);
+      if (out) face.setTint(0x777777);
+      const name = this.add
+        .text(x + 26, y, ps.name, {
+          fontFamily: 'monospace',
+          fontSize: '13px',
+          color: out ? '#6a5a4a' : '#e8d9c4',
+          stroke: '#1a1210',
+          strokeThickness: 3,
+        })
+        .setOrigin(0, 0.5)
+        .setDepth(40_000);
+      this.aliveList.push(face, name);
+      y += 44;
+    }
+  }
+
+  private updateVsHud() {
+    const board = this.run.vs;
+    const timer = this.vsTimer;
+    if (!board || !timer) return;
+    const director = vs.director;
+    const next = director?.nextShrinkIn();
+    if (next === undefined) {
+      timer.setText('');
+    } else {
+      const s = Math.max(0, Math.ceil(next));
+      const txt = `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+      const warn = s <= 10;
+      timer.setText(warn ? `ALERTA! O mapa encolhe em ${txt}` : `O mapa encolhe em ${txt}`);
+      timer.setColor(warn ? '#ff5050' : '#e8d9c4');
+    }
+    // Esta sala vai ser destruída: aviso piscando
+    const doomedSoon = director?.isDoomedSoon(this.def);
+    if (doomedSoon && !this.doomText) {
+      this.doomText = this.add
+        .text(GAME_WIDTH / 2, GAME_HEIGHT / 2 - 120, 'Esta sala vai ser destruída! Saia!', {
+          fontFamily: 'monospace',
+          fontSize: '26px',
+          color: '#ff4040',
+          stroke: '#1a0505',
+          strokeThickness: 6,
+        })
+        .setOrigin(0.5)
+        .setDepth(36_000);
+      this.tweens.add({ targets: this.doomText, alpha: 0.2, duration: 300, yoyo: true, repeat: -1 });
+    } else if (!doomedSoon && this.doomText) {
+      this.doomText.destroy();
+      this.doomText = undefined;
+    }
+    for (const s of this.slots) if (s.map) s.map.warning = !!director?.warning;
+  }
+
+  /** O tabuleiro encolheu: portas para salas que sumiram ficam gradeadas; mapas atualizam. */
+  refreshDoorsAfterShrink() {
+    for (const side of Object.keys(DOOR_POS) as DoorSide[]) {
+      if (this.sealed.has(side) || this.doors[side]) continue;
+      // Havia porta aqui? (o desenho da sala tem a abertura)
+      if (!this.hadDoor(side)) continue;
+      this.sealed.add(side);
+      drawDoorBars(this, side).setAlpha(0.9);
+    }
+    for (const s of this.slots) s.map?.draw();
+  }
+
+  private hadDoor(side: DoorSide) {
+    const r = this.def;
+    const step: Record<DoorSide, [number, number]> = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+    const [dx, dy] = step[side];
+    const board = this.run.vs;
+    if (!board) return false;
+    const x = r.gx + dx;
+    const y = r.gy + dy;
+    return x >= 0 && y >= 0 && x < board.w && y < board.h && this.openedAtStart.has(side);
+  }
+
+  /** Portas que a sala tinha quando foi criada. */
+  private get openedAtStart() {
+    return (this._doorsAtStart ??= new Set(Object.keys(this.doors) as DoorSide[]));
+  }
+
+  private _doorsAtStart?: Set<DoorSide>;
+
+  /** A sala foi destruída com gatos dentro: todos caem. */
+  destroyRoom() {
+    this.doomed = true;
+    for (const s of this.slots) s.player?.kill();
+    this.cameras.main.shake(600, 0.02);
+    sfx(this, 'shrink');
+  }
+
+  /** Mensagem para quem foi eliminado (só ele vê). */
+  private showEliminated(slot: Slot) {
+    if (slot.outShown) return;
+    slot.outShown = true;
+    const t = this.add
+      .text(GAME_WIDTH / 2, GAME_HEIGHT / 2 + 120, 'Você foi eliminado', {
+        fontFamily: 'monospace',
+        fontSize: '30px',
+        color: '#c8c0b8',
+        stroke: '#1a1210',
+        strokeThickness: 6,
+      })
+      .setOrigin(0.5)
+      .setDepth(36_000);
+    markOwner(t, slot.ps.idx);
+    if (!slot.local) this.cameras.main.ignore(t);
+  }
+
+  /** Fim do VS: mostra quem venceu (todas as salas). */
+  showVsWinner(winner?: PlayerState) {
+    this.finished = true;
+    sfx(this, winner && this.slots.some((s) => s.local && s.ps === winner) ? 'victory' : 'defeat');
+    const cx = GAME_WIDTH / 2;
+    const cy = GAME_HEIGHT / 2;
+    const overlay = this.add.rectangle(cx, cy, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0.55).setDepth(30_000);
+    const style = { fontFamily: 'monospace', color: '#e8d9c4', stroke: '#1a1210', strokeThickness: 6 };
+    this.add
+      .text(cx, cy - 30, winner ? `${winner.name} venceu!` : 'Empate!', { ...style, fontSize: '50px', color: '#f2c879' })
+      .setOrigin(0.5)
+      .setDepth(30_001);
+    if (winner) this.add.image(cx, cy + 50, `cat_${winner.cat}`, 0).setScale(0.9).setDepth(30_001);
+    this.add
+      .text(cx, cy + 120, this.restartHint(), { ...style, fontSize: '18px', strokeThickness: 4, color: '#b8a898' })
+      .setOrigin(0.5)
+      .setDepth(30_001);
+    this.waitRestart(overlay);
   }
 
   // ---------- Cenário ----------
@@ -1814,3 +2144,4 @@ export class RoomScene extends Phaser.Scene {
     }
   }
 }
+

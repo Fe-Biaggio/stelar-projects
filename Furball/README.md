@@ -51,7 +51,8 @@ O morcego vem da folha 3; rato, cachorro, pássaro e humano foram desenhados por
 `tools/draw_bosses.py` (troque os PNGs em `public/assets/boss_*.png` por artes próprias).
 
 Controles: **WASD** para andar, **setas** para cuspir bolas de pelo, **E** para colocar bomba,
-**Espaço** (ou **Q**) para usar o item usável. O botão **Início**
+**Espaço** (ou **Q**) para usar o item usável, **M** (ou **Tab**) para ampliar/reduzir o mapa
+(no celular, toque no mapa). O botão **Início**
 (canto superior direito) ou **Esc** volta à seleção a qualquer momento. Depois de perder,
 **R** recomeça com o mesmo gato. Adicione `?debug` na URL para ver as colisões.
 
@@ -202,9 +203,44 @@ tudo de volta.
 ### Controle (gamepad)
 
 Funciona com controles no navegador (Xbox, Android, Retroid Pocket etc.): analógico esquerdo
-ou direcional anda; A/B/X/Y ou analógico direito atiram (Y cima, A baixo, X esquerda, B
-direita); L1/L2 bomba; R1/R2 item usável; Start volta ao início. Nos menus: direcional e A
-(B volta). Ao usar o controle, os botões de toque somem.
+ou direcional anda; analógico direito mira e atira. Botões de ação: **A** atira para onde o
+gato olha, **B** bomba, **X** item usável, **Y** amplia/reduz o mapa. Segunda opção: **L1**
+atira, **R1** bomba, **L2** item, **R2** mapa. Start volta ao início. Nos menus: direcional e
+A (B volta). Ao usar o controle, os botões de toque somem.
+
+### Sons
+
+Todos os efeitos são gerados na hora pela biblioteca [ZzFX](https://github.com/KilledByAPixel/ZzFX)
+(sem arquivos de áudio): tiro, acerto, inimigo morrendo, dano, moeda, item, bomba, porta,
+baú, alarme do VS, vitória e derrota. Para ajustar um som, mude os números em `src/audio/sfx.ts`.
+
+### Multiplayer
+
+Na tela inicial, **Multiplayer**: criar sala (pública ou privada), entrar numa sala pública
+(lista com até 10 salas) ou entrar com o código de 5 letras de uma sala privada. Na sala de
+espera cada jogador escolhe o nome e o gato (não pode repetir) e vê o ping de todos; quem
+hospeda começa quando todos estiverem prontos.
+
+- **Co-op (2 jogadores):** sem fogo amigo; os dois nascem juntos e enfrentam os 5 níveis.
+  Mapa 25% maior e 2x mais inimigos. Moedas, bombas e chaves são divididas. Itens
+  compartilhados (valem para os dois) ou individuais (1,5x mais itens e drops), escolha de
+  quem hospeda. Quem cai volta com meio coração quando o outro limpa uma sala; se os dois
+  caírem, fim de jogo. Passar por uma porta leva os dois.
+- **VS (até 4 jogadores):** tabuleiro de salas (largura e altura de 1 a 12; recomendado 12x12
+  para 4, 10x10 para 3, 8x8 para 2), quase todo preenchido, com salas de item (12 num 12x12)
+  e de boss (5), proporcionais ao tamanho (nenhuma com 9 salas ou menos, ou com um lado de 2 ou
+  menos, como 2x8). Cada gato nasce numa sala aleatória. O mapa grande abre
+  no começo mostrando sua posição, as salas de item e de boss; cada um descobre as salas
+  sozinho. As bolas de pelo machucam os outros gatos. Aos 5 minutos somem as pontas do lado
+  maior (12x12 vira 10x10; 12x4 vira 10x4) e depois, a cada 2 minutos, mais uma linha ou
+  coluna, até sobrar a sala do centro. 10 segundos antes toca o alarme e as salas condenadas
+  avisam; quem ficar nelas cai. No 2x2, o mapa marca a sala que vai sobrar. A lista na lateral
+  mostra os gatos vivos (quem caiu fica apagado e deitado). O último vivo vence.
+
+Como funciona: conexão direta entre os aparelhos (WebRTC com [PeerJS](https://peerjs.com/);
+o servidor gratuito do PeerJS só apresenta os aparelhos). Quem hospeda roda o jogo inteiro e
+manda a imagem da sala para os outros (`src/net/mirror.ts`), que mandam de volta os comandos.
+Algumas redes 4G muito fechadas podem não conectar (precisaria de um servidor de retransmissão).
 
 ### Jogar no celular
 
@@ -214,8 +250,11 @@ dele, o botão do item usável (quando você tem um). Na
 seleção, o primeiro toque escolhe o gato e o segundo começa. Com o celular em pé, a página
 pede para girar.
 
-Versão publicada para testar no celular: https://claude.ai/artifact/6K96NXayqtfjv1uhSQq6Mp
-(privada). Para atualizar: `npm run build`, `python tools/artifact_page.py` e publicar de novo
+Versão pública (qualquer navegador, atualiza sozinha a cada push no `main` pelo GitHub
+Actions): https://fe-biaggio.github.io/stelar-projects/
+
+Versão no Artifact: https://claude.ai/artifact/6K96NXayqtfjv1uhSQq6Mp
+(privada; o multiplayer pode não funcionar lá). Para atualizar: `npm run build`, `python tools/artifact_page.py` e publicar de novo
 `dist/furball.html` com os arquivos de `dist/assets/`.
 
 ## Estrutura
@@ -234,9 +273,11 @@ Furball/
 │   ├── run.ts           # estado da partida (status, vida, nível, o que ficou em cada sala)
 │   ├── shop.ts          # itens e preços da loja
 │   ├── stats.ts         # status do gato (multiplicadores)
+│   ├── audio/sfx.ts     # efeitos sonoros (ZzFX)
+│   ├── net/             # multiplayer: conexão (peer.ts), espelho da sala (mirror.ts), sessão
 │   ├── objects/         # jogador, inimigos, projéteis...
-│   ├── scenes/          # carregamento, tela inicial, seleção de personagem, sala
-│   ├── ui/              # controles de toque
+│   ├── scenes/          # telas, sala (RoomScene), multiplayer, sala de espera, VS (vsDirector)
+│   ├── ui/              # HUD, mapa, menus, controle e controles de toque
 │   └── world/           # mapa do nível (floor.ts), desenho da sala, explosão e empurrão
 └── tools/               # scripts para recortar sprites das folhas
 ```

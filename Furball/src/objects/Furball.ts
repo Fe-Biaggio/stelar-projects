@@ -69,6 +69,8 @@ export function createFurballTexture(scene: Phaser.Scene, cat: CatId) {
  */
 export class Furball {
   dead = false;
+  /** Quem atirou (no VS a bola machuca os outros gatos). */
+  owner = 0;
   /** Dano causado ao acertar. */
   readonly damage: number;
   /** Raio usado nas colisões. */

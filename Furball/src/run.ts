@@ -4,11 +4,15 @@ import { Inventory, PickupKind, newInventory } from './pickups';
 import { HP_PER_HEART, Stats, newStats } from './stats';
 import { FloorMap, devFloor, generateFloor } from './world/floor';
 import { Prop } from './world/props';
+import { VsBoard } from './world/vsfloor';
 
 // Estado de uma partida: o que precisa sobreviver quando o gato troca de sala.
 
-/** "dev": sala de testes com painéis; "game": mapa aleatório com inimigos e boss. */
-export type GameMode = 'dev' | 'game';
+/**
+ * "dev": sala de testes com painéis; "game": mapa aleatório com inimigos e boss;
+ * "coop": 2 gatos juntos nos 5 níveis; "vs": até 4 gatos num mapa grande, o último vivo vence.
+ */
+export type GameMode = 'dev' | 'game' | 'coop' | 'vs';
 
 /** Identificador de uma sala no mapa ("x,y" na grade). */
 export type RoomId = string;
@@ -52,14 +56,18 @@ export interface RoomState {
   props?: Prop[];
 }
 
-export interface Run {
-  mode: GameMode;
+/** Um gato da partida (no modo solo há só um). */
+export interface PlayerState {
+  /** Posição na lista de jogadores (0 = quem hospeda). */
+  idx: number;
+  name: string;
   cat: CatId;
   stats: Stats;
   /** Vida vermelha, em pontos (2 por coração). */
   hp: number;
   /** Escudo dos corações azuis, em pontos. Não se recupera. */
   shield: number;
+  /** No co-op o inventário é o mesmo objeto para os dois gatos (moedas, bombas e chaves juntas). */
   inventory: Inventory;
   /** Pontos de vida doados ao gatinho vampiro na partida inteira. */
   bloodDonated: number;
@@ -67,6 +75,19 @@ export interface Run {
   vampireReward: boolean;
   /** Item usável carregado (só um por vez) e quanto já recarregou (0 a 1). */
   active?: { id: ItemId; charge: number };
+  alive: boolean;
+  /** Só no VS: sala em que o gato está e as salas que ele já viu. */
+  room?: RoomId;
+  seen?: RoomId[];
+  /** Ordem de eliminação no VS (para o ranking). */
+  outAt?: number;
+}
+
+export interface Run {
+  mode: GameMode;
+  players: PlayerState[];
+  /** Co-op: itens valem para os dois gatos (true) ou só para quem pegou (false). */
+  sharedItems: boolean;
   /** Nível (andar) atual. A chave dourada só vale no nível em que foi pega. */
   level: number;
   /** Mapa do nível atual. */
@@ -77,31 +98,69 @@ export interface Run {
   cracked: string[];
   /** Estado das salas já visitadas neste nível. */
   rooms: Record<RoomId, RoomState>;
+  /** Só no VS: tabuleiro, tempo e salas destruídas. */
+  vs?: VsBoard;
 }
 
-export function newRun(cat: CatId, mode: GameMode = 'dev'): Run {
+export function newPlayer(idx: number, cat: CatId, name: string, inventory = newInventory()): PlayerState {
   const stats = newStats();
-  const inventory = newInventory();
-  if (mode === 'game') {
-    // Como no Isaac, começa com uma bomba; e uma chave para a loja ou o baú.
-    inventory.bombs = 1;
-    inventory.keys = 1;
-  }
   return {
-    mode,
+    idx,
+    name,
     cat,
     stats,
     hp: stats.maxHp * HP_PER_HEART,
     shield: 0,
     inventory,
+    bloodDonated: 0,
+    vampireReward: false,
+    alive: true,
+  };
+}
+
+/** Opções do mapa para o modo cooperativo. */
+export function floorOptions(run: Pick<Run, 'mode' | 'sharedItems'>) {
+  if (run.mode !== 'coop') return {};
+  // Multiplayer: mapa 25% maior; itens individuais: 1,5x mais itens e drops
+  return { sizeMult: 1.25, itemMult: run.sharedItems ? 1 : 1.5 };
+}
+
+export function newRun(cat: CatId, mode: GameMode = 'dev'): Run {
+  const p = newPlayer(0, cat, 'Você');
+  if (mode === 'game') {
+    // Como no Isaac, começa com uma bomba; e uma chave para a loja ou o baú.
+    p.inventory.bombs = 1;
+    p.inventory.keys = 1;
+  }
+  return {
+    mode,
+    players: [p],
+    sharedItems: true,
     level: 1,
     floor: mode === 'game' ? generateFloor(1) : devFloor(),
     unlocked: [],
     cracked: [],
     rooms: {},
-    bloodDonated: 0,
-    vampireReward: false,
   };
+}
+
+/** Partida cooperativa: os dois gatos dividem moedas, bombas e chaves. */
+export function newCoopRun(players: { cat: CatId; name: string }[], sharedItems: boolean): Run {
+  const inv = newInventory();
+  inv.bombs = 1;
+  inv.keys = 1;
+  const run: Run = {
+    mode: 'coop',
+    players: players.map((p, i) => newPlayer(i, p.cat, p.name, inv)),
+    sharedItems,
+    level: 1,
+    floor: devFloor(),
+    unlocked: [],
+    cracked: [],
+    rooms: {},
+  };
+  run.floor = generateFloor(1, Math.random, floorOptions(run));
+  return run;
 }
 
 /** Último nível: vencer o boss dele termina o jogo. */
@@ -113,9 +172,9 @@ export const MAX_LEVEL = 5;
  */
 export function startNextLevel(run: Run) {
   run.level += 1;
-  run.inventory.goldenKey = false;
+  for (const p of run.players) p.inventory.goldenKey = false;
   run.unlocked = [];
   run.cracked = [];
   run.rooms = {};
-  run.floor = generateFloor(run.level);
+  run.floor = generateFloor(run.level, Math.random, floorOptions(run));
 }
