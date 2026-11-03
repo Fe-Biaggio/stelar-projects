@@ -88,6 +88,9 @@ export function newRun(cat: CatId, mode: GameMode = 'dev'): Run {
   };
 }
 
+/** Último nível: vencer o boss dele termina o jogo. */
+export const MAX_LEVEL = 5;
+
 /**
  * Vai para o próximo nível (depois de derrotar o boss): mapa novo e a chave dourada é perdida.
  * Vida, status, moedas, bombas e chaves prateadas continuam.

@@ -1,7 +1,7 @@
 """Gera os sprites de inimigos a partir da folha 3.
 
 enemies.png (frames de 72x72): 0 mosca, 1 aranha, 2 bolota vermelha, 3 cabeça pálida.
-boss.png (1 frame de 160x128): morcego grande de olhos vermelhos.
+boss_bat.png (160x128): morcego grande de olhos vermelhos (boss do nível 1).
 """
 from pathlib import Path
 from PIL import Image
@@ -43,5 +43,5 @@ for i, box in enumerate(ENEMIES):
 out.save(OUT / "enemies.png")
 
 boss = crop(BOSS)
-place(boss, 160, 128, 1.4).save(OUT / "boss.png")
-print("salvo enemies.png e boss.png")
+place(boss, 160, 128, 1.4).save(OUT / "boss_bat.png")
+print("salvo enemies.png e boss_bat.png")

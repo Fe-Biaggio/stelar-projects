@@ -177,7 +177,9 @@ export class Player extends Phaser.Events.EventEmitter {
     // O escudo azul absorve o dano primeiro
     const fromShield = Math.min(this.shield, amount);
     this.shield -= fromShield;
-    this.hp = Math.max(0, this.hp - (amount - fromShield));
+    // Arredonda para evitar sobras como 0,0000001 com dano fracionado
+    this.shield = Math.round(this.shield * 100) / 100;
+    this.hp = Math.max(0, Math.round((this.hp - (amount - fromShield)) * 100) / 100);
     this.emitHp();
 
     const push = new Phaser.Math.Vector2(this.feet.x - fromX, this.feet.y - fromY);

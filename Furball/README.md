@@ -30,10 +30,25 @@ Laranja, Siamês, Tricolor ou Frajola):
   o boss deixa um item, um coração e um alçapão para o próximo nível (mapa novo; a chave
   dourada é perdida). Começa com 1 bomba e 1 chave.
 
-Inimigos (ficam mais fortes a cada nível): mosca (voa em sua direção), aranha (pulos rápidos),
-bolota vermelha (atira nas 4 direções), cabeça pálida (persegue) e o boss Morcegão (anéis de
-tiros e investidas; com metade da vida fica mais rápido). Qualquer inimigo tira 1 de vida
-(meio coração) por contato ou tiro. Depois de levar dano, o gato fica 1 segundo invulnerável.
+São **5 níveis**; vencer o boss do nível 5 termina o jogo com vitória. A cada nível aparece
+um inimigo a mais por sala (até 8) e o dano dos inimigos cresce 0,5x (1x, 1,5x, 2x, 2,5x, 3x),
+sempre arredondado para baixo em meios corações: 1x e 1,5x tiram meio coração, 2x e 2,5x tiram
+um coração, 3x tira um e meio. Depois de levar dano, o gato fica 1 segundo invulnerável.
+
+Inimigos: mosca (voa em sua direção), aranha (pulos rápidos), bolota vermelha (atira nas 4
+direções) e cabeça pálida (persegue). Bosses, um por nível (com metade da vida atacam mais
+rápido):
+
+| Nível | Boss | Ataques |
+|---|---|---|
+| 1 | Morcegão | anel de 8 tiros, investida |
+| 2 | Ratazana | rápida, leque de 3 tiros mirados, 3 investidas seguidas |
+| 3 | Cachorrão | anel de 10 tiros, 2 investidas seguidas |
+| 4 | Gavião | voa, leque de 5 tiros mirados, mergulho |
+| 5 | O Humano | lento, pisão com anel de 16 tiros, leque de 3 tiros |
+
+O morcego vem da folha 3; rato, cachorro, pássaro e humano foram desenhados por
+`tools/draw_bosses.py` (troque os PNGs em `public/assets/boss_*.png` por artes próprias).
 
 Controles: **WASD** para andar, **setas** para cuspir bolas de pelo, **E** para colocar bomba. O botão **Início**
 (canto superior direito) ou **Esc** volta à seleção a qualquer momento. Depois de perder,
@@ -164,7 +179,7 @@ um print do jogo em `screenshots/` (fora do git), para enviar capturas durante o
 
 Para regerar os sprites a partir das folhas: `python tools/extract_cats.py`,
 `python tools/extract_ui.py`, `python tools/extract_items.py`, `python tools/extract_pickups.py`
-e `python tools/extract_enemies.py`.
+`python tools/extract_enemies.py` e `python tools/draw_bosses.py`.
 
 ## Núcleo do jogo (MVP)
 

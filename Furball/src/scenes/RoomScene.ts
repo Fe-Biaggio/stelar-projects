@@ -4,7 +4,7 @@ import { CatId, PLAYABLE } from '../cats';
 import { ITEMS, ItemId, randomItemOf } from '../items';
 import { Bomb } from '../objects/Bomb';
 import { Chest } from '../objects/Chest';
-import { ENEMY_NAMES, Enemy, EnemyKind, EnemyShot } from '../objects/Enemy';
+import { BOSS_BY_LEVEL, Enemy, EnemyKind, EnemyShot } from '../objects/Enemy';
 import { DummyCat } from '../objects/DummyCat';
 import { Furball, createFurballTexture } from '../objects/Furball';
 import { ItemPickup, ItemSpawn } from '../objects/ItemPickup';
@@ -13,7 +13,7 @@ import { Vendor } from '../objects/Vendor';
 import { Facing, Player } from '../objects/Player';
 import { HEART_POINTS, PICKUP_FRAME, PickupKind, addPickup, isHeart, useKey } from '../pickups';
 import { RARITY_INFO, RARITY_ORDER, rarityOdds, rollRarity } from '../rarity';
-import { GameMode, RoomId, RoomState, Run, newRun, startNextLevel } from '../run';
+import { GameMode, MAX_LEVEL, RoomId, RoomState, Run, newRun, startNextLevel } from '../run';
 import { STAT_LABELS, Stats, formatMult } from '../stats';
 import { TouchControls, isTouchDevice } from '../ui/TouchControls';
 import { drawScorch, playExplosion } from '../world/explosion';
@@ -59,8 +59,10 @@ const KNOCK_RADIUS = 220;
 const KNOCK_MAX = 260; // distância que algo colado na bomba é lançado
 const BOMB_DAMAGE_PLAYER = 2; // 1 coração
 const BOMB_DAMAGE_ENEMY = 10;
-/** Dano de qualquer inimigo (contato ou tiro): 1 = meio coração. */
+/** Dano de qualquer inimigo no nível 1 (contato ou tiro): 1 = meio coração. */
 const ENEMY_DAMAGE = 1;
+/** Quanto o dano dos inimigos cresce a cada nível (0,5x). */
+const ENEMY_DAMAGE_PER_LEVEL = 0.5;
 
 // Corações no HUD: quantos por linha e o espaçamento.
 const HEARTS_PER_ROW = 8;
@@ -132,6 +134,9 @@ export class RoomScene extends Phaser.Scene {
   /** Grades nas portas enquanto há inimigos. */
   private bars = new Map<DoorSide, Phaser.GameObjects.Graphics>();
   private trapdoor?: { x: number; y: number };
+  private bossName = 'Boss';
+  /** O jogo acabou com vitória: a sala para, mas os botões de recomeçar continuam. */
+  private finished = false;
   private bossBar?: { fill: Phaser.GameObjects.Rectangle; boss: Enemy; parts: Phaser.GameObjects.GameObject[] };
   private player!: Player;
   private dummy?: DummyCat;
@@ -187,6 +192,19 @@ export class RoomScene extends Phaser.Scene {
     return neighbors(this.run.floor, this.roomId);
   }
 
+  /** Multiplicador de dano dos inimigos: 1x no nível 1, +0,5x a cada nível (1; 1,5; 2; ...). */
+  private get enemyDamageMult() {
+    return 1 + ENEMY_DAMAGE_PER_LEVEL * (this.run.level - 1);
+  }
+
+  /**
+   * Dano dos inimigos em pontos inteiros (meios corações), arredondado para baixo:
+   * 1,5x tira meio coração; 2x tira um coração; 2,5x também tira um coração.
+   */
+  private get enemyDamage() {
+    return Math.max(1, Math.floor(ENEMY_DAMAGE * this.enemyDamageMult));
+  }
+
   /** Ainda há inimigos vivos (as portas ficam fechadas). */
   private get inCombat() {
     return this.enemies.some((e) => !e.dead);
@@ -202,6 +220,7 @@ export class RoomScene extends Phaser.Scene {
 
   create() {
     this.leaving = false;
+    this.finished = false;
     this.furballs = [];
     this.spikeRects = [];
     this.items = [];
@@ -276,7 +295,10 @@ export class RoomScene extends Phaser.Scene {
     this.createHud();
 
     if (this.newLevel) {
-      this.time.delayedCall(250, () => this.showBanner(`Nível ${this.run.level}`, 'Um novo porão…', '#f2c879'));
+      const mult = this.enemyDamageMult.toFixed(1).replace('.', ',');
+      this.time.delayedCall(250, () =>
+        this.showBanner(`Nível ${this.run.level} de ${MAX_LEVEL}`, `Mais inimigos · dano deles ${mult}x`, '#f2c879'),
+      );
     }
     if (!this.enterFrom && !this.newLevel) {
       this.hint = this.add
@@ -316,7 +338,7 @@ export class RoomScene extends Phaser.Scene {
   }
 
   update(time: number, deltaMs: number) {
-    if (this.leaving) return;
+    if (this.leaving || this.finished) return;
     // Limita o passo para a física não dar saltos se a aba ficar em segundo plano.
     const dt = Math.min(deltaMs, 50) / 1000;
 
@@ -374,11 +396,13 @@ export class RoomScene extends Phaser.Scene {
   private spawnEnemies(from: { x: number; y: number }) {
     const level = this.run.level;
     if (this.roomDef.type === 'boss') {
-      const boss = new Enemy(this, GAME_WIDTH / 2, FLOOR.y + 150, 'boss', level);
+      const bossType = BOSS_BY_LEVEL[Math.min(level, BOSS_BY_LEVEL.length) - 1];
+      const boss = new Enemy(this, GAME_WIDTH / 2, FLOOR.y + 150, 'boss', level, bossType);
       this.enemies.push(boss);
       this.createBossBar(boss);
     } else {
-      const count = Math.min(2 + Math.floor(Math.random() * 3) + Math.floor((level - 1) / 2), 6);
+      // 2 a 4 inimigos no nível 1, e mais um a cada nível (até 8)
+      const count = Math.min(2 + Math.floor(Math.random() * 3) + (level - 1), 8);
       const placed: { x: number; y: number }[] = [];
       for (let i = 0; i < count; i++) {
         let x = 0;
@@ -411,7 +435,7 @@ export class RoomScene extends Phaser.Scene {
       // Encostar em qualquer inimigo (boss incluído) tira 1 de vida: meio coração
       if (!e.dead && !e.spawning && !this.player.dead) {
         if (Phaser.Math.Distance.Between(feet.x, feet.y - 8, e.x, e.body.center.y) < e.radius + 14) {
-          this.player.takeDamage(ENEMY_DAMAGE, e.x, e.y);
+          this.player.takeDamage(this.enemyDamage, e.x, e.y);
         }
       }
     }
@@ -419,7 +443,7 @@ export class RoomScene extends Phaser.Scene {
       shot.update(dt);
       if (!shot.dead && !this.player.dead && Phaser.Math.Distance.Between(shot.x, shot.y, feet.x, feet.y) < 20) {
         shot.burst();
-        this.player.takeDamage(ENEMY_DAMAGE, shot.x, shot.y);
+        this.player.takeDamage(this.enemyDamage, shot.x, shot.y);
       }
     }
     this.enemyShots = this.enemyShots.filter((s) => !s.dead);
@@ -445,9 +469,15 @@ export class RoomScene extends Phaser.Scene {
     const cx = GAME_WIDTH / 2;
     const cy = GAME_HEIGHT / 2 + 30;
     if (this.roomDef.type === 'boss') {
+      this.bossName = this.bossBar?.boss.name ?? 'Boss';
       this.bossBar?.parts.forEach((p) => p.destroy());
       this.bossBar = undefined;
-      this.showBanner(`${ENEMY_NAMES.boss} derrotado!`, 'Desça pelo alçapão para o próximo nível', '#f2c879');
+      if (this.run.level >= MAX_LEVEL) {
+        // Último nível: fim de jogo com vitória
+        this.time.delayedCall(1200, () => this.showVictory());
+        return;
+      }
+      this.showBanner(`${this.bossName} derrotado!`, 'Desça pelo alçapão para o próximo nível', '#f2c879');
       this.placeTrapdoor(true);
       // Prêmio do boss: um item (a sorte ajuda) e um coração
       const id = randomItemOf(rollRarity(this.run.stats.luck));
@@ -466,7 +496,7 @@ export class RoomScene extends Phaser.Scene {
     const bg = this.add.rectangle(x, y, 404, 18, 0x120a0a, 0.85).setStrokeStyle(2, 0x3a1a1a).setDepth(39_000);
     const fill = this.add.rectangle(x - 198, y, 396, 10, 0xc8302a).setOrigin(0, 0.5).setDepth(39_001);
     const name = this.add
-      .text(x, y - 20, ENEMY_NAMES.boss, { fontFamily: 'monospace', fontSize: '14px', color: '#e8d9c4', stroke: '#1a1210', strokeThickness: 4 })
+      .text(x, y - 20, boss.name, { fontFamily: 'monospace', fontSize: '14px', color: '#e8d9c4', stroke: '#1a1210', strokeThickness: 4 })
       .setOrigin(0.5)
       .setDepth(39_001);
     this.bossBar = { fill, boss, parts: [bg, fill, name] };
@@ -1067,7 +1097,7 @@ export class RoomScene extends Phaser.Scene {
       }
     }
     this.add
-      .text(left, top + h + 4, `Nível ${this.run.level}`, { fontFamily: 'monospace', fontSize: '12px', color: '#b8a898' })
+      .text(left, top + h + 4, `Nível ${this.run.level}/${MAX_LEVEL}`, { fontFamily: 'monospace', fontSize: '12px', color: '#b8a898' })
       .setDepth(depth + 1);
   }
 
@@ -1118,10 +1148,11 @@ export class RoomScene extends Phaser.Scene {
     const maxHp = this.player.stats.maxHp;
     const frames: number[] = [];
     for (let i = 0; i < maxHp; i++) {
+      // A vida pode ter frações (dano 1,5x): qualquer pedaço de coração aparece como metade
       const pts = Phaser.Math.Clamp(hp - i * 2, 0, 2);
-      frames.push(pts === 2 ? 0 : pts === 1 ? 2 : 1);
+      frames.push(pts >= 2 ? 0 : pts > 0 ? 2 : 1);
     }
-    for (let i = 0; i < Math.ceil(shield / 2); i++) {
+    for (let i = 0; i < Math.ceil(shield / 2 - 1e-9); i++) {
       frames.push(shield - i * 2 >= 2 ? 3 : 4);
     }
 
@@ -1160,6 +1191,47 @@ export class RoomScene extends Phaser.Scene {
       this.heartRows = rows;
       this.layoutCounters();
     }
+  }
+
+  /** Tela de vitória depois do boss do último nível. */
+  private showVictory() {
+    this.finished = true; // o gato para; nada mais acontece na sala
+    this.player.body.velocity.set(0, 0);
+    const cx = GAME_WIDTH / 2;
+    const cy = GAME_HEIGHT / 2;
+    const overlay = this.add.rectangle(cx, cy, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0).setDepth(30_000);
+    const style = { fontFamily: 'monospace', color: '#e8d9c4', stroke: '#1a1210', strokeThickness: 6 };
+    const title = this.add
+      .text(cx, cy - 40, 'Você venceu!', { ...style, fontSize: '52px', color: '#f2c879' })
+      .setOrigin(0.5)
+      .setAlpha(0)
+      .setDepth(30_001);
+    const detail = this.add
+      .text(cx, cy + 14, `Os ${MAX_LEVEL} porões estão livres dos monstros.`, { ...style, fontSize: '20px', strokeThickness: 4 })
+      .setOrigin(0.5)
+      .setAlpha(0)
+      .setDepth(30_001);
+    const sub = this.add
+      .text(cx, cy + 56, this.touch ? 'Toque para jogar de novo' : 'R para jogar de novo  ·  Esc para trocar de gato', {
+        ...style,
+        fontSize: '18px',
+        strokeThickness: 4,
+        color: '#b8a898',
+      })
+      .setOrigin(0.5)
+      .setAlpha(0)
+      .setDepth(30_001);
+    this.tweens.add({ targets: overlay, fillAlpha: 0.6, duration: 700 });
+    this.tweens.add({ targets: [title, detail, sub], alpha: 1, duration: 700, delay: 300 });
+    title.setScale(0.6);
+    this.tweens.add({ targets: title, scale: 1, duration: 700, delay: 300, ease: 'Back.Out' });
+
+    const again: RoomData = { cat: this.cat, mode: this.run.mode };
+    this.input.keyboard!.once('keydown-R', () => this.scene.restart(again));
+    this.time.delayedCall(1000, () => {
+      overlay.setInteractive();
+      overlay.once('pointerdown', () => this.scene.restart(again));
+    });
   }
 
   private showGameOver() {

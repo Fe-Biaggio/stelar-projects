@@ -3,6 +3,32 @@ import { FLOOR } from '../config';
 
 export type EnemyKind = 'fly' | 'spider' | 'blob' | 'pale' | 'boss';
 
+/** Boss de cada nível: 1 morcegão, 2 rato, 3 cachorro, 4 pássaro, 5 humano. */
+export type BossType = 'bat' | 'rat' | 'dog' | 'bird' | 'human';
+export const BOSS_BY_LEVEL: BossType[] = ['bat', 'rat', 'dog', 'bird', 'human'];
+
+interface BossSpec {
+  name: string;
+  /** Altura do voo (0 = anda no chão). */
+  flying: number;
+  /** Velocidade seguindo o gato. */
+  follow: number;
+  /** Anel de tiros em volta: a cada `every` segundos, `count` tiros. */
+  ring?: { every: number; count: number; speed: number };
+  /** Leque de tiros mirados no gato. */
+  spread?: { every: number; count: number; angle: number; speed: number };
+  /** Investidas: a cada `every` segundos, `dashes` investidas seguidas. */
+  charge?: { every: number; dashes: number; speed: number };
+}
+
+export const BOSSES: Record<BossType, BossSpec> = {
+  bat: { name: 'Morcegão', flying: 40, follow: 70, ring: { every: 2.2, count: 8, speed: 200 }, charge: { every: 6, dashes: 1, speed: 520 } },
+  rat: { name: 'Ratazana', flying: 0, follow: 130, spread: { every: 1.4, count: 3, angle: 0.3, speed: 260 }, charge: { every: 3.5, dashes: 3, speed: 600 } },
+  dog: { name: 'Cachorrão', flying: 0, follow: 90, ring: { every: 2.6, count: 10, speed: 210 }, charge: { every: 4.5, dashes: 2, speed: 650 } },
+  bird: { name: 'Gavião', flying: 55, follow: 105, spread: { every: 1.2, count: 5, angle: 0.25, speed: 280 }, charge: { every: 5, dashes: 1, speed: 720 } },
+  human: { name: 'O Humano', flying: 0, follow: 55, ring: { every: 2.4, count: 16, speed: 170 }, spread: { every: 1.8, count: 3, angle: 0.22, speed: 300 } },
+};
+
 /** O que um inimigo precisa saber do mundo a cada quadro. */
 export interface EnemyWorld {
   /** Pés do gato. */
@@ -34,7 +60,7 @@ export const ENEMY_NAMES: Record<EnemyKind, string> = {
   spider: 'Aranha',
   blob: 'Bolota',
   pale: 'Cabeça pálida',
-  boss: 'Morcegão',
+  boss: 'Boss',
 };
 
 /** Inimigo genérico; o comportamento muda pelo tipo (`kind`). */
@@ -53,6 +79,8 @@ export class Enemy {
   /** Fica parado e transparente por um instante ao aparecer, para não pegar o gato de surpresa. */
   private spawnDelay = 0.7;
   private charging = 0;
+  private dashesLeft = 0;
+  private timer3 = 0;
   private hurtFlash = 0;
 
   constructor(
@@ -61,8 +89,10 @@ export class Enemy {
     y: number,
     readonly kind: EnemyKind,
     level = 1,
+    /** Qual boss (só quando kind === 'boss'). */
+    readonly bossType: BossType = 'bat',
   ) {
-    this.spec = SPECS[kind];
+    this.spec = kind === 'boss' ? { ...SPECS.boss, flying: BOSSES[bossType].flying } : SPECS[kind];
     // Inimigos ficam um pouco mais fortes a cada nível
     this.maxHp = Math.round(this.spec.hp * (1 + (level - 1) * 0.35));
     this.hp = this.maxHp;
@@ -73,7 +103,7 @@ export class Enemy {
     this.shadow = scene.add.ellipse(x, y, size * 1.1, size * 0.35, 0x000000, 0.35);
     this.sprite =
       kind === 'boss'
-        ? scene.add.image(x, y, 'boss').setOrigin(0.5, 1)
+        ? scene.add.image(x, y, `boss_${bossType}`).setOrigin(0.5, 1)
         : scene.add.image(x, y, 'enemies', this.spec.frame).setOrigin(0.5, 1).setScale(this.spec.scale);
     this.sprite.setAlpha(0);
     this.shadow.setAlpha(0);
@@ -81,6 +111,7 @@ export class Enemy {
     scene.tweens.add({ targets: [this.shadow], alpha: 0.35, duration: 500 });
     this.timer = 1 + Math.random();
     this.timer2 = kind === 'boss' ? 4 : 0;
+    this.timer3 = 1.5;
     this.sync(0);
   }
 
@@ -91,6 +122,11 @@ export class Enemy {
   /** Posição do "chão" do inimigo (onde fica a sombra). */
   get y() {
     return this.body.bottom - 4;
+  }
+
+  /** Nome para a barra de vida (boss) ou para avisos. */
+  get name() {
+    return this.kind === 'boss' ? BOSSES[this.bossType].name : ENEMY_NAMES[this.kind];
   }
 
   get radius() {
@@ -180,54 +216,87 @@ export class Enemy {
     this.sync(time);
   }
 
-  /** Morcegão: flutua atrás do gato, solta anéis de tiros e dá investidas. */
+  /**
+   * Boss: segue o gato e usa os ataques do seu tipo (anel de tiros, leque mirado, investidas).
+   * Com menos da metade da vida, ataca mais rápido.
+   */
   private updateBoss(dt: number, dx: number, dy: number, dist: number, world: EnemyWorld) {
+    const spec = BOSSES[this.bossType];
     const v = this.body.velocity;
-    const angry = this.hp < this.maxHp / 2;
+    const speedUp = this.hp < this.maxHp / 2 ? 0.7 : 1; // intervalos 30% menores quando bravo
     if (this.charging > 0) {
       this.charging -= dt;
-      if (this.charging <= 0) v.scale(0.2);
+      if (this.charging <= 0) {
+        v.scale(0.2);
+        // Investidas seguidas (rato, cachorro)
+        if (this.dashesLeft > 0) this.startCharge(world, spec.charge!.speed, 0.25);
+      }
       return;
     }
     const f = 1 - Math.exp(-1.5 * dt);
-    v.x += ((dx / dist) * 70 - v.x) * f;
-    v.y += ((dy / dist) * 70 - v.y) * f;
+    v.x += ((dx / dist) * spec.follow - v.x) * f;
+    v.y += ((dy / dist) * spec.follow - v.y) * f;
 
-    // Anel de tiros
-    this.timer -= dt;
-    if (this.timer <= 0) {
-      this.timer = angry ? 1.6 : 2.2;
-      const n = angry ? 12 : 8;
-      const offset = Math.random() * Math.PI;
-      for (let i = 0; i < n; i++) {
-        const a = offset + (i / n) * Math.PI * 2;
-        world.shoot(this.x, this.y, Math.cos(a) * 200, Math.sin(a) * 200);
+    if (spec.ring) {
+      this.timer -= dt;
+      if (this.timer <= 0) {
+        this.timer = spec.ring.every * speedUp;
+        const n = Math.round(spec.ring.count * (speedUp < 1 ? 1.5 : 1));
+        const offset = Math.random() * Math.PI;
+        for (let i = 0; i < n; i++) {
+          const a = offset + (i / n) * Math.PI * 2;
+          world.shoot(this.x, this.y, Math.cos(a) * spec.ring.speed, Math.sin(a) * spec.ring.speed);
+        }
+        this.squash();
+        // O humano pisa forte: a tela treme
+        if (this.bossType === 'human') this.scene.cameras.main.shake(180, 0.008);
       }
-      this.squash();
     }
-    // Investida: treme em vermelho por meio segundo e se joga no gato
-    this.timer2 -= dt;
-    if (this.timer2 <= 0) {
-      this.timer2 = angry ? 4 : 6;
-      v.set(0, 0);
-      this.sprite.setTint(0xff6060);
-      this.scene.tweens.add({
-        targets: this.sprite,
-        x: '+=5',
-        duration: 50,
-        yoyo: true,
-        repeat: 4,
-        onComplete: () => {
-          if (this.dead) return;
-          this.sprite.clearTint();
-          const ndx = world.target.x - this.x;
-          const ndy = world.target.y - this.y;
-          const nd = Math.hypot(ndx, ndy) || 1;
-          v.set((ndx / nd) * 520, (ndy / nd) * 520);
-          this.charging = 0.55;
-        },
-      });
+    if (spec.spread) {
+      this.timer3 -= dt;
+      if (this.timer3 <= 0) {
+        this.timer3 = spec.spread.every * speedUp;
+        const base = Math.atan2(dy, dx);
+        const n = spec.spread.count;
+        for (let i = 0; i < n; i++) {
+          const a = base + (i - (n - 1) / 2) * spec.spread.angle;
+          world.shoot(this.x, this.y, Math.cos(a) * spec.spread.speed, Math.sin(a) * spec.spread.speed);
+        }
+        this.squash();
+      }
     }
+    if (spec.charge) {
+      this.timer2 -= dt;
+      if (this.timer2 <= 0) {
+        this.timer2 = spec.charge.every * speedUp;
+        this.dashesLeft = spec.charge.dashes;
+        this.startCharge(world, spec.charge.speed, 0.5);
+      }
+    }
+  }
+
+  /** Avisa (treme em vermelho) e depois se joga na direção do gato. */
+  private startCharge(world: EnemyWorld, speed: number, warn: number) {
+    this.dashesLeft -= 1;
+    this.body.velocity.set(0, 0);
+    this.charging = 999; // parado enquanto avisa
+    this.sprite.setTint(0xff6060);
+    this.scene.tweens.add({
+      targets: this.sprite,
+      x: '+=5',
+      duration: 50,
+      yoyo: true,
+      repeat: Math.max(1, Math.round(warn / 0.1) - 1),
+      onComplete: () => {
+        if (this.dead) return;
+        this.sprite.clearTint();
+        const ndx = world.target.x - this.x;
+        const ndy = world.target.y - this.y;
+        const nd = Math.hypot(ndx, ndy) || 1;
+        this.body.velocity.set((ndx / nd) * speed, (ndy / nd) * speed);
+        this.charging = 0.5;
+      },
+    });
   }
 
   private squash() {
