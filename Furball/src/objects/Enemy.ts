@@ -69,6 +69,8 @@ export class Enemy {
   readonly body: Phaser.Physics.Arcade.Body;
   hp: number;
   readonly maxHp: number;
+  /** Último gato que acertou (placar do VS). */
+  lastHitBy = -1;
   dead = false;
   private readonly spec: EnemySpec;
   private readonly sprite: Phaser.GameObjects.Image;

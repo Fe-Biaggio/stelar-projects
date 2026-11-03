@@ -24,7 +24,7 @@ export class MirrorScene extends Phaser.Scene {
   private moveKeys!: MoveKeys;
   private aimKeys!: AimKeys;
   private meta?: ViewerMeta;
-  private counts = { bomb: 0, item: 0, map: 0 };
+  private counts = { bomb: 0, item: 0, map: 0, tap: 0 };
   private lastSent = '';
   private lastSendAt = 0;
 
@@ -33,7 +33,7 @@ export class MirrorScene extends Phaser.Scene {
   }
 
   create(data: { cats: CatId[] }) {
-    this.counts = { bomb: 0, item: 0, map: 0 };
+    this.counts = { bomb: 0, item: 0, map: 0, tap: 0 };
     this.lastSent = '';
     this.meta = undefined;
     for (const cat of data.cats ?? []) createFurballTexture(this, cat);
@@ -51,6 +51,7 @@ export class MirrorScene extends Phaser.Scene {
     kb.on('keydown-M', () => this.counts.map++);
     kb.on('keydown-TAB', () => this.counts.map++);
     kb.on('keydown-ESC', () => this.leave());
+    kb.on('keydown-R', () => this.counts.tap++);
 
     if (isTouchDevice(this)) {
       this.touch = new TouchControls(
@@ -63,6 +64,7 @@ export class MirrorScene extends Phaser.Scene {
     this.input.on('pointerdown', (p: Phaser.Input.Pointer) => {
       const mb = this.meta?.mb;
       if (mb && mb[2] > 0 && p.x >= mb[0] && p.x <= mb[0] + mb[2] && p.y >= mb[1] && p.y <= mb[1] + mb[3]) this.counts.map++;
+      else this.counts.tap++;
     });
     this.makeLeaveButton();
 

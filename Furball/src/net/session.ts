@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { SfxName } from '../audio/sfx';
 import { Facing } from '../objects/Player';
 import { Run } from '../run';
+import { BotBrain } from '../scenes/bot';
 import { MirrorEncoder, Snap } from './mirror';
 import { Msg, NetHost, net } from './peer';
 
@@ -17,6 +18,8 @@ export interface RemoteInput {
   bomb: number;
   item: number;
   map: number;
+  /** Toques/R fora do mapa (fim de partida: voltar à sala de espera). */
+  tap?: number;
 }
 
 /** O que a sala precisa saber de cada tela remota (item usável e onde fica o mapa). */
@@ -41,19 +44,23 @@ export class HostSession {
   /** Jogador (índice) de cada conexão. */
   readonly idxByPeer = new Map<string, number>();
   readonly inputs = new Map<number, RemoteInput>();
-  private readonly used = new Map<number, { bomb: number; item: number; map: number }>();
+  private readonly used = new Map<number, { bomb: number; item: number; map: number; tap: number }>();
   /** Em que cena cada jogador remoto está olhando. */
   readonly viewing = new Map<number, Phaser.Scene>();
   private lastSend = new WeakMap<Phaser.Scene, number>();
   /** Saiu da partida (desconectou). */
   readonly gone = new Set<number>();
+  /** Gatos comandados por bot (rodam aqui, em quem hospeda). */
+  readonly bots = new Map<number, BotBrain>();
 
   constructor(
     readonly host: NetHost,
     readonly run: Run,
     peers: [string, number][],
+    bots: number[] = [],
   ) {
     for (const [peer, idx] of peers) this.idxByPeer.set(peer, idx);
+    for (const idx of bots) this.bots.set(idx, new BotBrain());
     host.on('msg', this.onMsg, this);
     host.on('leave', this.onLeave, this);
   }
@@ -99,13 +106,14 @@ export class HostSession {
   /** Ações apertadas desde a última vez (cada aperto vale uma vez). */
   takeActions(idx: number) {
     const inp = this.inputs.get(idx);
-    const last = this.used.get(idx) ?? { bomb: inp?.bomb ?? 0, item: inp?.item ?? 0, map: inp?.map ?? 0 };
+    const last = this.used.get(idx) ?? { bomb: inp?.bomb ?? 0, item: inp?.item ?? 0, map: inp?.map ?? 0, tap: inp?.tap ?? 0 };
     const out = {
       bomb: !!inp && inp.bomb > last.bomb,
       item: !!inp && inp.item > last.item,
       map: !!inp && inp.map > last.map,
+      tap: !!inp && (inp.tap ?? 0) > last.tap,
     };
-    if (inp) this.used.set(idx, { bomb: inp.bomb, item: inp.item, map: inp.map });
+    if (inp) this.used.set(idx, { bomb: inp.bomb, item: inp.item, map: inp.map, tap: inp.tap ?? 0 });
     return out;
   }
 
@@ -121,7 +129,7 @@ export class HostSession {
   /** Jogadores remotos olhando esta cena. */
   viewersIn(scene: Phaser.Scene): number[] {
     const out: number[] = [];
-    for (const [idx, s] of this.viewing) if (s === scene) out.push(idx);
+    for (const [idx, s] of this.viewing) if (s === scene && !this.bots.has(idx)) out.push(idx);
     return out;
   }
 

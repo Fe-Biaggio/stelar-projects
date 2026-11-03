@@ -148,6 +148,52 @@ export class VsDirector {
     for (const s of this.scenes.values()) if (s.sys.isActive()) s.showVsWinner(winner);
   }
 
+  /** Quem já caiu assiste um gato vivo (segue ele de sala em sala). */
+  private watching = new Map<number, number>();
+  private watchLabels = new Map<number, Phaser.GameObjects.Text>();
+
+  private sceneOf(idx: number) {
+    for (const s of this.scenes.values()) if (s.sys.isActive() && s.slots.some((x) => x.ps.idx === idx)) return s;
+    return undefined;
+  }
+
+  /** Botão de bomba/item de quem caiu: passa a assistir o próximo gato vivo. */
+  nextSpectate(idx: number) {
+    const alive = this.run.players.filter((p) => p.alive);
+    if (!alive.length) return;
+    const cur = this.watching.get(idx);
+    const i = alive.findIndex((p) => p.idx === cur);
+    this.watching.set(idx, alive[(i + 1) % alive.length].idx);
+    this.updateSpectators();
+  }
+
+  private updateSpectators() {
+    const board = this.run.vs!;
+    const alive = this.run.players.filter((p) => p.alive);
+    if (!alive.length) return;
+    for (const ps of this.run.players) {
+      if (ps.alive || session.host?.bots.has(ps.idx) || session.host?.gone.has(ps.idx)) continue;
+      // Um instante para ver a própria queda
+      if (board.elapsed - (ps.outAt ?? 0) < 2.5 && !this.watching.has(ps.idx)) continue;
+      let t = this.watching.get(ps.idx);
+      if (t === undefined || !this.run.players[t].alive) {
+        // Prefere assistir uma pessoa (não um bot)
+        t = (alive.find((p) => !session.host?.bots.has(p.idx)) ?? alive[0]).idx;
+        this.watching.set(ps.idx, t);
+      }
+      const scene = this.sceneOf(t);
+      if (!scene) continue;
+      const cur = ps.idx === net.myIdx ? this.localScene : (session.host?.viewing.get(ps.idx) as RoomScene | undefined);
+      const label = this.watchLabels.get(ps.idx);
+      if (cur !== scene || !label?.active || label.scene !== scene || label.getData('t') !== t) {
+        label?.destroy();
+        this.setViewer(ps.idx, scene);
+        if (cur && cur !== scene) this.closeIfEmpty(cur);
+        this.watchLabels.set(ps.idx, scene.spectatorLabel(ps.idx, this.run.players[t].name).setData('t', t));
+      }
+    }
+  }
+
   /** Segundos até o tabuleiro encolher de novo (undefined = já é 1x1). */
   nextShrinkIn(): number | undefined {
     const board = this.run.vs!;
@@ -167,6 +213,7 @@ export class VsDirector {
   private tick(dt: number) {
     const board = this.run.vs;
     if (!board || this.finished) return;
+    this.updateSpectators();
     board.elapsed += dt;
     const left = this.nextShrinkIn();
     if (left === undefined) {

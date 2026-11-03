@@ -4,7 +4,7 @@ import { FLOOR } from '../config';
 import { ELEMENT_COLOR, ShotElement, Stats, shotElements } from '../stats';
 
 const SHOT_SPEED = 430; // pixels por segundo (com velocidade do tiro 1x)
-const RANGE = 220; // distância percorrida antes de começar a cair (~5 tiles no total, com a queda)
+const RANGE = 190; // distância percorrida antes de começar a cair (vezes o alcance do gato)
 const FALL_GRAVITY = 900; // aceleração da queda no fim do alcance
 const INHERIT = 0.35; // quanto da velocidade do gato passa para o tiro
 const RADIUS = 10; // raio na textura
@@ -83,6 +83,7 @@ export class Furball {
   private readonly vx: number;
   private readonly vy: number;
   private traveled = 0;
+  private readonly range: number;
   private height: number;
   private fallSpeed = 0;
   private readonly palette: FurPalette;
@@ -101,6 +102,7 @@ export class Furball {
     this.vx = dir.x * speed + inherited.x * INHERIT;
     this.vy = dir.y * speed + inherited.y * INHERIT;
     this.damage = stats.damage;
+    this.range = RANGE * (stats.range ?? 1);
     this.elements = shotElements(stats);
     const scale = SCALE * stats.size;
     this.hitRadius = RADIUS * scale;
@@ -125,7 +127,7 @@ export class Furball {
     this.traveled += Math.hypot(dx, dy);
 
     // Ao chegar no alcance, começa a cair até tocar o chão.
-    if (this.traveled > RANGE) {
+    if (this.traveled > this.range) {
       this.fallSpeed += FALL_GRAVITY * dt;
       this.height -= this.fallSpeed * dt;
     }

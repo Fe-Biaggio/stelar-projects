@@ -14,6 +14,8 @@ const MAX_SPEED = 420;
 export class Bomb {
   readonly body: Phaser.Physics.Arcade.Body;
   exploded = false;
+  /** Quem colocou (placar do VS). */
+  owner = -1;
   /** Fica true quando o gato sai de cima da bomba recém-colocada. */
   solid = false;
   /** Colisões ligadas a esta bomba; são removidas quando ela explode. */

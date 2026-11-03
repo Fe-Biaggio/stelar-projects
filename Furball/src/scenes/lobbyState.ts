@@ -36,3 +36,8 @@ export const lobbyPlayers: LobbyPlayer[] = [];
 export function maxPlayers(mode: LobbyConfig['mode']) {
   return mode === 'coop' ? 2 : 4;
 }
+
+/** Vaga ocupada por um bot (roda em quem hospeda). */
+export function isBot(p: LobbyPlayer) {
+  return p.id.startsWith('bot-');
+}

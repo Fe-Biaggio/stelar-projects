@@ -8,7 +8,7 @@ import { Run, newCoopRun, newPlayer } from '../run';
 import { MenuItem, MenuList, askText, menuBackground, saveName, savedName } from '../ui/Menu';
 import { drawRoom } from '../world/room';
 import { generateVsFloor } from '../world/vsfloor';
-import { LobbyPlayer, LobbyView, lobbyConfig, lobbyPlayers, maxPlayers } from './lobbyState';
+import { LobbyPlayer, LobbyView, isBot, lobbyConfig, lobbyPlayers, maxPlayers } from './lobbyState';
 import { VsDirector, vs } from './vsDirector';
 
 // Sala de espera: cada um escolhe o nome e o gato (sem repetir), vê o ping de todos e quem
@@ -62,7 +62,7 @@ export class LobbyScene extends Phaser.Scene {
       lobbyPlayers.push({ id: 'host', name: savedName(), cat: 'black', ping: 0 });
     } else {
       // Volta da partida: tira quem saiu no meio
-      for (let i = lobbyPlayers.length - 1; i > 0; i--) if (!host.conns.has(lobbyPlayers[i].id)) lobbyPlayers.splice(i, 1);
+      for (let i = lobbyPlayers.length - 1; i > 0; i--) if (!isBot(lobbyPlayers[i]) && !host.conns.has(lobbyPlayers[i].id)) lobbyPlayers.splice(i, 1);
     }
     host.accept = () => (this.starting ? 'A partida já começou' : lobbyPlayers.length >= maxPlayers(lobbyConfig.mode) ? 'A sala está cheia' : null);
     host.info = () => ({
@@ -185,6 +185,19 @@ export class LobbyScene extends Phaser.Scene {
       );
     }
     if (this.isHost) {
+      list.push(
+        {
+          label: () => 'Adicionar bot',
+          detail: () => 'Ocupa uma vaga e joga sozinho (com um gato livre)',
+          disabled: () => lobbyPlayers.length >= maxPlayers(lobbyConfig.mode) || !this.freeCats().length,
+          action: () => this.addBot(),
+        },
+        {
+          label: () => 'Remover bot',
+          disabled: () => !lobbyPlayers.some(isBot),
+          action: () => this.removeBot(),
+        },
+      );
       list.push({
         label: () => 'Iniciar partida',
         detail: () => this.notReady() ?? 'Todos prontos!',
@@ -194,6 +207,32 @@ export class LobbyScene extends Phaser.Scene {
     }
     list.push({ label: () => 'Sair da sala', action: () => this.leave() });
     return list;
+  }
+
+  private freeCats() {
+    const taken = new Set(lobbyPlayers.map((p) => p.cat));
+    return PLAYABLE.filter((c) => !taken.has(c));
+  }
+
+  /** Bot com um gato aleatório que ninguém escolheu. */
+  private addBot() {
+    const free = this.freeCats();
+    if (!free.length || lobbyPlayers.length >= maxPlayers(lobbyConfig.mode)) return;
+    let n = 1;
+    while (lobbyPlayers.some((p) => p.id === `bot-${n}`)) n++;
+    lobbyPlayers.push({ id: `bot-${n}`, name: `Bot ${n}`, cat: Phaser.Utils.Array.GetRandom(free), ping: 0 });
+    playSfx('join');
+    this.hostChanged();
+  }
+
+  private removeBot() {
+    for (let i = lobbyPlayers.length - 1; i > 0; i--) {
+      if (isBot(lobbyPlayers[i])) {
+        lobbyPlayers.splice(i, 1);
+        break;
+      }
+    }
+    this.hostChanged();
   }
 
   private setConfig(f: () => void) {
@@ -285,8 +324,14 @@ export class LobbyScene extends Phaser.Scene {
         vs: board,
       };
     }
-    const peers: [string, number][] = lobbyPlayers.slice(1).map((p, i) => [p.id, i + 1]);
-    session.host = new HostSession(host, run, peers);
+    const peers: [string, number][] = [];
+    const bots: number[] = [];
+    lobbyPlayers.forEach((p, i) => {
+      if (i === 0) return;
+      if (isBot(p)) bots.push(i);
+      else peers.push([p.id, i]);
+    });
+    session.host = new HostSession(host, run, peers, bots);
     net.myIdx = 0;
     const cats = players.map((p) => p.cat);
     for (const [id, idx] of peers) host.send(id, { t: 'start', idx, cats, mode: run.mode });
@@ -342,8 +387,9 @@ export class LobbyScene extends Phaser.Scene {
           .text(120, y + 13, p.cat ? CATS[p.cat].name : 'escolhendo o gato…', { fontFamily: 'monospace', fontSize: '12px', color: '#b8a898' })
           .setOrigin(0, 0.5),
       );
-      const ping = i === 0 ? 'anfitrião' : `${p.ping} ms`;
-      const color = i === 0 ? '#8a7a6a' : p.ping < 80 ? '#7ad67a' : p.ping < 180 ? '#e2b13c' : '#ff6a50';
+      const bot = isBot(p);
+      const ping = i === 0 ? 'anfitrião' : bot ? 'bot' : `${p.ping} ms`;
+      const color = i === 0 || bot ? '#8a7a6a' : p.ping < 80 ? '#7ad67a' : p.ping < 180 ? '#e2b13c' : '#ff6a50';
       this.dynamic.push(this.add.text(456, y, ping, { fontFamily: 'monospace', fontSize: '14px', color }).setOrigin(1, 0.5));
     }
 

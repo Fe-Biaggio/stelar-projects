@@ -74,6 +74,7 @@ superior direito mostra os valores atuais.
 | Bolinha de lã | Velocidade do tiro | Comum |
 | Peixe fresco | Dano | Épico |
 | Leitinho | Tamanho da bola de pelo | Incomum |
+| Estilingue | Alcance (distância que a bola de pelo voa) | Comum |
 
 Na sala de teste há um de cada no chão; R ou Esc recomeçam com os status zerados.
 
@@ -206,14 +207,15 @@ Quatro itens mudam a bola de pelo (e se combinam):
 
 | Item | Bola | No inimigo |
 |---|---|---|
-| Pimenta | pegando fogo | pega fogo: perde vida por 3 s |
+| Pimenta | pegando fogo | pega fogo: perde 0,2 de vida por segundo, por 3 s |
 | Cubo de gelo | congelada | para por 1 s (o boss, um instantinho) |
 | Catavento de mão | de vento | é empurrado 3x mais longe |
 | Pedra | cheia de areia | fica lento por 3 s |
 | Pimenta + gelo | molhada (água) | fica lento por 3 s |
 
 Fogueiras aparecem nas salas como pedras e buracos (mesmo tamanho): bloqueiam a passagem e
-encostar tira meio coração. A bomba apaga a fogueira, e uma bola congelada ou molhada também.
+encostar tira meio coração. A bomba apaga a fogueira, e uma bola congelada ou molhada também;
+a bola de pelo comum apaga com 3 acertos (a chama diminui a cada um).
 Sprites desenhados por `tools/draw_elements.py`.
 
 No modo desenvolvedor, à direita da sala do baú há duas salas com todos os itens do jogo
@@ -254,7 +256,15 @@ hospeda começa quando todos estiverem prontos.
   maior (12x12 vira 10x10; 12x4 vira 10x4) e depois, a cada 2 minutos, mais uma linha ou
   coluna, até sobrar a sala do centro. 10 segundos antes toca o alarme e as salas condenadas
   avisam; quem ficar nelas cai. No 2x2, o mapa marca a sala que vai sobrar. A lista na lateral
-  mostra os gatos vivos (quem caiu fica apagado e deitado). O último vivo vence.
+  mostra os gatos vivos (quem caiu fica apagado e deitado). O último vivo vence. O nome de
+  cada jogador aparece embaixo do gato. Quem cai assiste os outros (bomba ou item troca de
+  gato). No fim, o placar mostra criaturas e bosses derrotados, itens passivos pegos e a
+  pontuação (criatura 10, item 50, boss 200): o vencedor fica sempre em 1º, os outros pela
+  pontuação, e a estrela marca a maior. Qualquer jogador (R, A ou toque) leva todos de volta
+  para a sala de espera.
+- **Bots:** na sala de espera, quem hospeda pode adicionar bots no lugar de jogadores (co-op ou
+  VS). O bot pega um gato livre aleatório e joga sozinho: mira alinhando com o alvo, segue o
+  parceiro no co-op e anda rumo ao centro no VS.
 
 Como funciona: conexão direta entre os aparelhos (WebRTC com [PeerJS](https://peerjs.com/);
 o servidor gratuito do PeerJS só apresenta os aparelhos). Quem hospeda roda o jogo inteiro e

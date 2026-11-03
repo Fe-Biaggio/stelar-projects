@@ -17,7 +17,8 @@ export type ItemId =
   | 'pepper'
   | 'ice'
   | 'pinwheel'
-  | 'stone';
+  | 'stone'
+  | 'slingshot';
 
 /** Efeito de um item usável (ativado com um botão, por um tempo). */
 export interface ActiveEffect {
@@ -126,6 +127,15 @@ export const ITEMS: Record<ItemId, ItemInfo> = {
     texture: 'elements',
     element: 'sand',
     rarity: 'uncommon',
+  },
+  slingshot: {
+    id: 'slingshot',
+    name: 'Estilingue',
+    effect: `Alcance ${plus}`,
+    frame: 4,
+    texture: 'elements',
+    stat: 'range',
+    rarity: 'common',
   },
 };
 

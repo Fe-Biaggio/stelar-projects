@@ -83,6 +83,22 @@ def stone():
     return done(img, 64, 64)
 
 
+def slingshot():
+    img, d = canvas(64, 64)
+    wood = (150, 96, 52, 255)
+    # Cabo e forquilha em Y
+    d.line(P((32, 58), (32, 36)), fill=INK, width=9 * S)
+    d.line(P((32, 58), (32, 36)), fill=wood, width=6 * S)
+    for x in (18, 46):
+        d.line(P((32, 38), (x, 14)), fill=INK, width=9 * S)
+        d.line(P((32, 38), (x, 14)), fill=wood, width=6 * S)
+    d.line(P((29, 50), (35, 50)), fill=(110, 70, 40, 255), width=2 * S)
+    # Elástico com a bolinha de pelo puxada
+    d.line(P((18, 14), (32, 30), (46, 14)), fill=(200, 60, 50, 255), width=2 * S)
+    ell(d, (26, 24, 38, 36), (230, 220, 205, 255))
+    return done(img, 64, 64)
+
+
 def logs(d):
     # Pedras em volta e lenha cruzada
     for x in [10, 20, 32, 44, 54]:
@@ -113,8 +129,8 @@ def campfire_out():
 
 
 def main():
-    sheet = Image.new('RGBA', (64 * 4, 64), (0, 0, 0, 0))
-    for i, f in enumerate([pepper, ice, pinwheel, stone]):
+    sheet = Image.new('RGBA', (64 * 5, 64), (0, 0, 0, 0))
+    for i, f in enumerate([pepper, ice, pinwheel, stone, slingshot]):
         sheet.paste(f(), (i * 64, 0))
     sheet.save(os.path.join(OUT, 'elements.png'))
     fire = Image.new('RGBA', (64 * 3, 80), (0, 0, 0, 0))

@@ -81,6 +81,14 @@ export interface PlayerState {
   seen?: RoomId[];
   /** Ordem de eliminação no VS (para o ranking). */
   outAt?: number;
+  /** Placar do VS: criaturas e bosses derrotados, itens passivos pegos. */
+  score?: { kills: number; items: number; bosses: number };
+}
+
+/** Pontuação final do placar do VS. */
+export function vsPoints(ps: PlayerState) {
+  const s = ps.score ?? { kills: 0, items: 0, bosses: 0 };
+  return s.kills * 10 + s.items * 50 + s.bosses * 200;
 }
 
 export interface Run {
@@ -115,6 +123,7 @@ export function newPlayer(idx: number, cat: CatId, name: string, inventory = new
     bloodDonated: 0,
     vampireReward: false,
     alive: true,
+    score: { kills: 0, items: 0, bosses: 0 },
   };
 }
 

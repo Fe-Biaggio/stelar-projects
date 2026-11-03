@@ -15,7 +15,7 @@ import { Npc } from '../objects/Npc';
 import { Facing, Player } from '../objects/Player';
 import { HEART_POINTS, PickupKind, addPickup, isHeart, useKey } from '../pickups';
 import { RARITY_INFO, RARITY_ORDER, rarityOdds, rollRarity } from '../rarity';
-import { GameMode, MAX_LEVEL, PlayerState, RoomId, RoomState, Run, newRun, startNextLevel } from '../run';
+import { GameMode, MAX_LEVEL, PlayerState, RoomId, RoomState, Run, newRun, startNextLevel, vsPoints } from '../run';
 import { STAT_LABELS, Stats, formatMult } from '../stats';
 import { BTN, PadInput } from '../ui/Gamepad';
 import { Hud, markOwner } from '../ui/Hud';
@@ -24,6 +24,7 @@ import { TouchControls, isTouchDevice } from '../ui/TouchControls';
 import { drawScorch, playExplosion } from '../world/explosion';
 import { priceOf, rollShopItems } from '../shop';
 import { RoomDef, doorKey, neighbors } from '../world/floor';
+import { BotView } from './bot';
 import { DOOR_POS, DoorSide, drawBossDoorMark, drawDoorBars, drawDoorCracks, drawLockedDoor, drawRoom, drawTrapdoor } from '../world/room';
 import { net } from '../net/peer';
 import { ViewerMeta, session } from '../net/session';
@@ -82,7 +83,7 @@ const DEV_ACTIVE_ITEMS: [ItemId, number, number][] = [
 // Salas de teste à direita do baú (modo desenvolvedor): todos os itens, em duas páginas.
 const DEV_ITEM_PAGES: ItemId[][] = [
   ['can', 'catnip', 'brush', 'churu', 'yarn', 'fish', 'milk', 'vampire'],
-  ['collar', 'paw', 'pepper', 'ice', 'pinwheel', 'stone'],
+  ['collar', 'paw', 'pepper', 'ice', 'pinwheel', 'stone', 'slingshot'],
 ];
 
 /** Posição de cada item na sala de teste: metade na linha de cima, metade na de baixo. */
@@ -216,6 +217,8 @@ export interface Slot {
   colliders: Phaser.Physics.Arcade.Collider[];
   /** Tela de "você foi eliminado" (VS). */
   outShown?: boolean;
+  /** Nome do jogador embaixo do gato (VS). */
+  nameTag?: Phaser.GameObjects.Text;
 }
 
 function weightedPick<T>(list: [T, number][]): T {
@@ -597,6 +600,8 @@ export class RoomScene extends Phaser.Scene {
     for (const c of slot.colliders) c.destroy();
     slot.player?.destroy();
     slot.player = undefined;
+    slot.nameTag?.destroy();
+    slot.nameTag = undefined;
     const i = this.slots.indexOf(slot);
     if (i >= 0) this.slots.splice(i, 1);
     // HUD e mapa dele: some daqui
@@ -628,6 +633,12 @@ export class RoomScene extends Phaser.Scene {
     player.loadActive(ps.active);
     player.on('active', () => slot.hud?.updateActiveHud(true));
     player.on('dead', () => this.onPlayerDead(slot));
+    if (this.isVs) {
+      slot.nameTag?.destroy();
+      slot.nameTag = this.add
+        .text(spawn.x, spawn.y, ps.name, { fontFamily: 'monospace', fontSize: '12px', color: slot.local ? '#f2c879' : '#e8d9c4', stroke: '#0c0907', strokeThickness: 3 })
+        .setOrigin(0.5, 0);
+    }
     return player;
   }
 
@@ -716,10 +727,14 @@ export class RoomScene extends Phaser.Scene {
     slot.aim = this.resolveFire(slot, aim, this.pad.fireHeld);
   }
 
-  /** Comandos que chegaram pela rede para os outros gatos. */
-  private readRemoteInputs() {
+  /** Comandos que chegaram pela rede para os outros gatos (e o que os bots decidiram). */
+  private readRemoteInputs(dt: number) {
     const hs = this.hs;
     if (!hs) return;
+    for (const slot of this.slots) {
+      const brain = hs.bots.get(slot.ps.idx);
+      if (brain && slot.player && !slot.player.dead) hs.inputs.set(slot.ps.idx, brain.think(this.botView(slot), dt));
+    }
     for (const slot of this.slots) {
       if (slot.local) continue;
       const inp = hs.input(slot.ps.idx);
@@ -731,6 +746,34 @@ export class RoomScene extends Phaser.Scene {
       if (acts.map) slot.map?.toggle();
       slot.aim = this.resolveFire(slot, inp.aim, inp.fire);
     }
+  }
+
+  /** O que o bot enxerga: alvos, parceiro e portas abertas. */
+  private botView(slot: Slot): BotView {
+    const me = slot.player!.body.center;
+    const targets: { x: number; y: number }[] = this.enemies.filter((e) => !e.dead).map((e) => ({ x: e.x, y: e.y }));
+    if (this.isVs) {
+      for (const s of this.alivePlayers) if (s !== slot) targets.push({ x: s.player!.body.center.x, y: s.player!.body.center.y });
+    }
+    const friendSlot = this.alivePlayers.find((s) => s !== slot && !this.hs?.bots.has(s.ps.idx)) ?? this.alivePlayers.find((s) => s !== slot);
+    const friend = friendSlot ? { x: friendSlot.player!.body.center.x, y: friendSlot.player!.body.center.y } : undefined;
+    const doors: BotView['doors'] = [];
+    if (!this.inCombat) {
+      const board = this.run.vs;
+      const next = board?.stages[board.stage + 1];
+      for (const [side, id] of Object.entries(this.doors) as [DoorSide, RoomId][]) {
+        if (this.isLocked(side)) continue;
+        const def = this.run.floor.rooms[id];
+        let score = Math.random();
+        if (board) {
+          // Rumo ao centro, e nunca para uma sala que vai sumir
+          score -= Math.abs(def.gx - board.center[0]) + Math.abs(def.gy - board.center[1]);
+          if (next && vs.director?.isDoomedSoon(def)) score -= 100;
+        }
+        doors.push({ side, score });
+      }
+    }
+    return { me: { x: me.x, y: me.y }, targets, friend, doors, vs: this.isVs, combat: this.inCombat };
   }
 
   /** Mira pelas setas/analógico; sem mira, o botão de atirar usa a direção para onde o gato olha. */
@@ -749,6 +792,7 @@ export class RoomScene extends Phaser.Scene {
 
   update(time: number, deltaMs: number) {
     if (this.leaving || this.finished) {
+      if (this.finished) this.checkRemoteRestart();
       this.hs?.pump(this);
       return;
     }
@@ -756,7 +800,7 @@ export class RoomScene extends Phaser.Scene {
     const dt = Math.min(deltaMs, 50) / 1000;
 
     this.readLocalInput();
-    this.readRemoteInputs();
+    this.readRemoteInputs(dt);
 
     if (this.hint) {
       const s = this.localSlot;
@@ -772,6 +816,10 @@ export class RoomScene extends Phaser.Scene {
       if (!player) continue;
       this.updateElevation(slot);
       const shot = player.update(slot.move, slot.aim, dt, time);
+      if (slot.nameTag) {
+        const feet = player.feet;
+        slot.nameTag.setPosition(feet.x, feet.y + 8).setDepth(feet.y + 1).setAlpha(player.dead ? 0.4 : 1);
+      }
       if (shot) {
         const f = new Furball(this, slot.ps.cat, shot.x, shot.y, shot.dir, shot.height, shot.inherited, shot.stats);
         f.owner = slot.ps.idx;
@@ -804,6 +852,7 @@ export class RoomScene extends Phaser.Scene {
         if (f.dead || !e.hits(x, y, f.hitRadius)) continue;
         const d = f.direction;
         f.burst();
+        e.lastHitBy = f.owner;
         e.takeHit(d.x, d.y, f.damage, f.elements);
         sfx(this, 'hit');
         if (this.showDamage) this.showDamageNumber(e.x, e.y - 50, f.damage);
@@ -957,6 +1006,12 @@ export class RoomScene extends Phaser.Scene {
       if (e.dead && !this.dropped.has(e)) {
         this.dropped.add(e);
         sfx(this, 'enemyDie');
+        const killer = this.run.players[e.lastHitBy];
+        if (killer) {
+          killer.score ??= { kills: 0, items: 0, bosses: 0 };
+          if (e.kind === 'boss') killer.score.bosses++;
+          else killer.score.kills++;
+        }
         if (e.kind !== 'boss') this.enemyDrop(e.x, e.y);
       }
     }
@@ -1454,6 +1509,10 @@ export class RoomScene extends Phaser.Scene {
 
   /** Coloca uma bomba nos pés do gato, se houver bombas no inventário. */
   private placeBomb(slot: Slot) {
+    if (this.isVs && !slot.ps.alive) {
+      vs.director?.nextSpectate(slot.ps.idx);
+      return;
+    }
     const player = slot.player;
     const inv = slot.ps.inventory;
     if (this.leaving || this.finished || !player || player.dead || inv.bombs <= 0) return;
@@ -1462,6 +1521,7 @@ export class RoomScene extends Phaser.Scene {
     sfx(this, 'bombPlace');
     const feet = player.feet;
     const bomb = new Bomb(this, feet.x, feet.y + 2, (b) => this.explode(b));
+    bomb.owner = slot.ps.idx;
     // Os gatos empurram a bomba, mas só depois de sair de cima dela.
     for (const s of this.slots) {
       if (!s.player) continue;
@@ -1562,6 +1622,7 @@ export class RoomScene extends Phaser.Scene {
     for (const e of this.enemies) {
       if (e.dead || Phaser.Math.Distance.Between(x, y, e.x, e.y) > BLAST_RADIUS + e.radius) continue;
       const a = Math.atan2(e.y - y, e.x - x);
+      if (bomb.owner >= 0) e.lastHitBy = bomb.owner;
       e.takeHit(Math.cos(a), Math.sin(a), BOMB_DAMAGE_ENEMY);
       if (this.showDamage) this.showDamageNumber(e.x, e.y - 50, BOMB_DAMAGE_ENEMY);
     }
@@ -1643,6 +1704,10 @@ export class RoomScene extends Phaser.Scene {
         const feet = player.feet;
         item.collect(feet.x, feet.y);
         const old = player.collect(item.info);
+        if (!item.info.active) {
+          slot.ps.score ??= { kills: 0, items: 0, bosses: 0 };
+          slot.ps.score.items++;
+        }
         // Trocou de item usável: o antigo fica no chão onde estava o novo
         if (old) this.items.push(new ItemPickup(this, item.x, item.y, old.id, { kind: 'drop' }));
         // Co-op com itens compartilhados: o item vale para o outro gato também
@@ -1698,6 +1763,10 @@ export class RoomScene extends Phaser.Scene {
   // ---------- Item usável ----------
 
   private useActive(slot: Slot) {
+    if (this.isVs && !slot.ps.alive) {
+      vs.director?.nextSpectate(slot.ps.idx);
+      return;
+    }
     if (this.leaving || this.finished) return;
     const player = slot.player;
     const item = player?.active;
@@ -1994,6 +2063,32 @@ export class RoomScene extends Phaser.Scene {
     );
   }
 
+  /**
+   * Fim da partida multiplayer: qualquer jogador (não só quem hospeda) pode apertar para todos
+   * voltarem juntos para a sala de espera.
+   */
+  private checkRemoteRestart() {
+    const hs = this.hs;
+    if (!hs || this.leaving) return;
+    if (this.finishedAt === undefined) {
+      this.finishedAt = this.time.now;
+      for (const idx of hs.inputs.keys()) hs.takeActions(idx); // ignora o que foi apertado antes
+      return;
+    }
+    if (this.time.now - this.finishedAt < 1200) return;
+    for (const idx of [...hs.inputs.keys()]) {
+      if (hs.bots.has(idx)) continue;
+      const acts = hs.takeActions(idx);
+      if (acts.bomb || acts.item || acts.tap || hs.input(idx)?.fire) {
+        this.leaving = true;
+        returnToLobby(this.game);
+        return;
+      }
+    }
+  }
+
+  private finishedAt?: number;
+
   /** Recomeçar depois do fim: no multiplayer, volta todo mundo para a sala de espera. */
   private restartGame() {
     if (this.isMulti) {
@@ -2036,7 +2131,7 @@ export class RoomScene extends Phaser.Scene {
   }
 
   private restartHint() {
-    if (this.isMulti) return this.touch ? 'Toque para voltar à sala de espera' : 'R ou A: voltar à sala de espera';
+    if (this.isMulti) return 'R, A ou toque: todos voltam para a sala de espera';
     return this.touch ? 'Toque para jogar de novo' : 'R para jogar de novo  ·  Esc para trocar de gato';
   }
 
@@ -2204,6 +2299,23 @@ export class RoomScene extends Phaser.Scene {
     sfx(this, 'shrink');
   }
 
+  /** "Assistindo fulano" para quem já caiu (só ele vê). */
+  spectatorLabel(idx: number, name: string) {
+    const t = this.add
+      .text(GAME_WIDTH / 2, GAME_HEIGHT - 16, `Assistindo ${name}  ·  bomba ou item: trocar`, {
+        fontFamily: 'monospace',
+        fontSize: '15px',
+        color: '#7ad6ff',
+        stroke: '#1a1210',
+        strokeThickness: 4,
+      })
+      .setOrigin(0.5)
+      .setDepth(36_000);
+    markOwner(t, idx);
+    if (idx !== net.myIdx) this.cameras.main.ignore(t);
+    return t;
+  }
+
   /** Mensagem para quem foi eliminado (só ele vê). */
   private showEliminated(slot: Slot) {
     if (slot.outShown) return;
@@ -2225,21 +2337,62 @@ export class RoomScene extends Phaser.Scene {
   /** Fim do VS: mostra quem venceu (todas as salas). */
   showVsWinner(winner?: PlayerState) {
     this.finished = true;
+    for (const s of this.slots) s.map?.setBig(false);
     sfx(this, winner && this.slots.some((s) => s.local && s.ps === winner) ? 'victory' : 'defeat');
     const cx = GAME_WIDTH / 2;
     const cy = GAME_HEIGHT / 2;
-    const overlay = this.add.rectangle(cx, cy, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0.55).setDepth(30_000);
+    const overlay = this.add.rectangle(cx, cy, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0.7).setDepth(50_000);
     const style = { fontFamily: 'monospace', color: '#e8d9c4', stroke: '#1a1210', strokeThickness: 6 };
     this.add
-      .text(cx, cy - 30, winner ? `${winner.name} venceu!` : 'Empate!', { ...style, fontSize: '50px', color: '#f2c879' })
+      .text(cx, 70, winner ? `${winner.name} venceu!` : 'Empate!', { ...style, fontSize: '44px', color: '#f2c879' })
       .setOrigin(0.5)
-      .setDepth(30_001);
-    if (winner) this.add.image(cx, cy + 50, `cat_${winner.cat}`, 0).setScale(0.9).setDepth(30_001);
+      .setDepth(50_001);
+    this.drawScoreboard(winner, 140);
     this.add
-      .text(cx, cy + 120, this.restartHint(), { ...style, fontSize: '18px', strokeThickness: 4, color: '#b8a898' })
+      .text(cx, GAME_HEIGHT - 50, this.restartHint(), { ...style, fontSize: '18px', strokeThickness: 4, color: '#b8a898' })
       .setOrigin(0.5)
-      .setDepth(30_001);
+      .setDepth(50_001);
     this.waitRestart(overlay);
+  }
+
+  /**
+   * Placar do VS: o vencedor (último vivo) sempre em 1º; os outros pela pontuação. A estrela
+   * marca a maior pontuação, mesmo de quem caiu antes.
+   */
+  private drawScoreboard(winner: PlayerState | undefined, top: number) {
+    const rest = this.run.players.filter((p) => p !== winner).sort((a, b) => vsPoints(b) - vsPoints(a) || (b.outAt ?? 0) - (a.outAt ?? 0));
+    const rows = winner ? [winner, ...rest] : rest;
+    const best = Math.max(...rows.map(vsPoints));
+    const cols = [
+      { x: 110, title: '#', align: 0.5 },
+      { x: 180, title: 'Jogador', align: 0 },
+      { x: 520, title: 'Criaturas', align: 0.5 },
+      { x: 640, title: 'Itens', align: 0.5 },
+      { x: 740, title: 'Bosses', align: 0.5 },
+      { x: 850, title: 'Pontos', align: 0.5 },
+    ];
+    const D = 50_001;
+    const text = (x: number, y: number, s: string, size: number, color: string, ox = 0.5) =>
+      this.add.text(x, y, s, { fontFamily: 'monospace', fontSize: `${size}px`, color, stroke: '#1a1210', strokeThickness: 3 }).setOrigin(ox, 0.5).setDepth(D);
+    this.add.rectangle(GAME_WIDTH / 2, top + 20 + rows.length * 36, 820, 50 + rows.length * 72, 0x1a1412, 0.85).setStrokeStyle(2, 0x5a4a3c).setDepth(D - 0.5);
+    for (const c of cols) text(c.x, top + 20, c.title, 14, '#b8a898', c.align);
+    rows.forEach((ps, i) => {
+      const y = top + 70 + i * 66;
+      const s = ps.score ?? { kills: 0, items: 0, bosses: 0 };
+      const pts = vsPoints(ps);
+      const color = i === 0 && winner ? '#f2c879' : ps.alive ? '#e8d9c4' : '#b8a898';
+      if (i > 0) this.add.rectangle(GAME_WIDTH / 2, y - 33, 780, 1, 0x5a4a3c).setDepth(D);
+      text(cols[0].x, y, i === 0 && winner ? '👑' : `${i + 1}º`, 20, color);
+      this.add.image(cols[1].x + 26, y + 4, `cat_${ps.cat}`, 0).setScale(0.42).setDepth(D);
+      text(cols[1].x + 64, y, ps.name, 20, color, 0);
+      text(cols[2].x, y, String(s.kills), 20, color);
+      text(cols[3].x, y, String(s.items), 20, color);
+      text(cols[4].x, y, String(s.bosses), 20, color);
+      text(cols[5].x, y, `${pointsLabel(pts, best, rows.length)}`, 20, pts === best && pts > 0 ? '#7ad6ff' : color);
+    });
+    function pointsLabel(p: number, b: number, n: number) {
+      return p === b && p > 0 && n > 1 ? `★ ${p}` : String(p);
+    }
   }
 
   // ---------- Cenário ----------

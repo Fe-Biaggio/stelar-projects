@@ -8,6 +8,15 @@ Lista do que foi pedido e ainda não está pronto (ou falta testar). Atualizada 
       conectar.
 - [ ] Testar o multiplayer em aparelhos de verdade (celular + PC + Retroid).
 
+## Feito em 03/11/2026 (bots, placar, alcance)
+
+- [x] Sons de acerto e morte de inimigo mais suaves.
+- [x] Bola de pelo comum apaga a fogueira em 3 acertos (a chama diminui); queimadura 0,2/s.
+- [x] Bots no multiplayer (ocupam uma vaga, gato livre aleatório).
+- [x] VS: nome embaixo dos gatos, placar no fim, quem cai assiste os outros, qualquer jogador
+      leva todos de volta para a sala de espera.
+- [x] Status de alcance (bola de pelo voa um pouco menos no começo) e item Estilingue (+0,2x).
+
 ## Feito em 03/11/2026 (elementos)
 
 - [x] Modo dev: 2 salas à direita da sala do baú com todos os itens para teste.

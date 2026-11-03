@@ -5,7 +5,7 @@ export const BASE_MAX_HP = 3;
 /** Cada coração vale 2 pontos de vida; o dano padrão (1) tira meio coração. */
 export const HP_PER_HEART = 2;
 
-export type MultStat = 'damage' | 'speed' | 'fireRate' | 'shotSpeed' | 'size' | 'luck';
+export type MultStat = 'damage' | 'speed' | 'fireRate' | 'shotSpeed' | 'size' | 'luck' | 'range';
 
 /** Elementos dos itens que mudam a bola de pelo. */
 export type Element = 'fire' | 'ice' | 'wind' | 'sand';
@@ -19,7 +19,7 @@ export interface Stats extends Record<MultStat, number> {
 }
 
 export function newStats(): Stats {
-  return { maxHp: BASE_MAX_HP, damage: 1, speed: 1, fireRate: 1, shotSpeed: 1, size: 1, luck: 1, elements: [] };
+  return { maxHp: BASE_MAX_HP, damage: 1, speed: 1, fireRate: 1, shotSpeed: 1, size: 1, luck: 1, range: 1, elements: [] };
 }
 
 /** Efeitos que a bola de pelo leva: fogo + gelo viram água; os outros se somam. */
@@ -49,6 +49,7 @@ export const STAT_LABELS: [MultStat | 'maxHp', string][] = [
   ['speed', 'Velocidade'],
   ['fireRate', 'Cadência'],
   ['shotSpeed', 'Vel. tiro'],
+  ['range', 'Alcance'],
   ['size', 'Tamanho'],
   ['luck', 'Sorte'],
 ];
