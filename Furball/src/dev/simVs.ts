@@ -3,7 +3,7 @@ import { net } from '../net/peer';
 import { session } from '../net/session';
 import { BotBrain } from '../scenes/bot';
 import { lobbyConfig } from '../scenes/lobbyState';
-import { vs } from '../scenes/vsDirector';
+import { returnToLobby, vs } from '../scenes/vsDirector';
 import type { RoomScene } from '../scenes/RoomScene';
 
 // Só no modo dev (npm run dev): simula partidas VS só com bots (inclusive no lugar de quem
@@ -30,7 +30,12 @@ export interface SimResult {
  * `speed`: segundos de jogo somados ao relógio do VS a cada meio segundo (fora do aviso de
  * 10 s, que corre normal). `maxMs`: tempo máximo de verdade.
  */
-export async function simVs(game: Phaser.Game, n: number, w: number, h: number, speed = 4, maxMs = 600_000): Promise<SimResult> {
+export async function simVs(game: Phaser.Game, n: number, w: number, h: number, speed = 4, maxMs = 300_000): Promise<SimResult> {
+  if (vs.director) {
+    // Partida anterior (que passou do tempo) ainda aberta: encerra antes
+    returnToLobby(game);
+    await wait(500);
+  }
   for (const s of game.scene.getScenes(true)) game.scene.stop(s.sys.settings.key);
   Object.assign(lobbyConfig, { mode: 'vs', w, h, isPublic: false });
   if (!net.host) {
