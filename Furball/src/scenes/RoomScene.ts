@@ -64,6 +64,18 @@ const TEST_PICKUPS: [PickupKind, number, number][] = [
   ['blueHeart', 12, 5],
 ];
 
+// Sala de testes dos itens usáveis (modo desenvolvedor).
+const DEV_ACTIVE_ITEMS: [ItemId, number, number][] = [
+  ['collar', 4, 4],
+  ['paw', 8, 4],
+];
+// Bombas para testar na sala de obstáculos (modo desenvolvedor).
+const DEV_PROPS_BOMBS: [number, number][] = [
+  [11, 5],
+  [12, 5],
+  [11, 6],
+];
+
 // Bomba: até onde causa dano e até onde empurra as coisas.
 const BLAST_RADIUS = 110;
 const KNOCK_RADIUS = 220;
@@ -176,7 +188,16 @@ export class RoomScene extends Phaser.Scene {
   private bars = new Map<DoorSide, Phaser.GameObjects.Graphics>();
   private trapdoor?: { x: number; y: number };
   private bossName = 'Boss';
+  /** Repor a sala de obstáculos: põe as bombas de teste de novo depois de recarregar a sala. */
+  private devBombsOnRestart = false;
   private propObjs: PropObj[] = [];
+  /** Slot do item usável no HUD. */
+  private activeHud?: {
+    box: Phaser.GameObjects.Rectangle;
+    icon: Phaser.GameObjects.Image;
+    bar: Phaser.GameObjects.Rectangle;
+    label: Phaser.GameObjects.Text;
+  };
   /** 0 = chão, 1 = em cima da cadeira, 2 = em cima da mesa. */
   private playerHeight = 0;
   /** Inimigos que já soltaram o que tinham ao morrer. */
@@ -269,6 +290,7 @@ export class RoomScene extends Phaser.Scene {
     this.leaving = false;
     this.finished = false;
     this.propObjs = [];
+    this.activeHud = undefined;
     this.playerHeight = 0;
     this.dropped.clear();
     this.furballs = [];
@@ -304,7 +326,7 @@ export class RoomScene extends Phaser.Scene {
     this.buildProps(firstVisit);
     for (const sc of this.roomState.scorches ?? []) drawScorch(this, sc.x, sc.y, sc.seed);
     const type = this.roomDef.type;
-    if (type === 'devStart') {
+    if (type === 'devStart' || type === 'devActives') {
       this.drawSpikes();
       // Gato de teste parado no meio da sala.
       this.dummy = new DummyCat(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 12, 'gray');
@@ -326,7 +348,9 @@ export class RoomScene extends Phaser.Scene {
       this.items.push(new ItemPickup(this, it.x, it.y, it.id, { kind: 'none' }, it.price));
     }
     for (const p of this.roomState.pickups) this.pickups.push(new Pickup(this, p.x, p.y, p.kind, false, p.tag));
-    if (firstVisit && type === 'devStart') this.respawnItems(false);
+    if (firstVisit && (type === 'devStart' || type === 'devActives')) this.respawnItems(false);
+    if ((firstVisit || this.devBombsOnRestart) && type === 'devProps') this.addDevBombs();
+    this.devBombsOnRestart = false;
 
     const spawn = this.spawnPoint();
     this.player = new Player(this, spawn.x, spawn.y, this.cat, this.run.stats, this.run.hp, this.run.shield, spawn.facing);
@@ -335,6 +359,8 @@ export class RoomScene extends Phaser.Scene {
     if (this.vendor) this.physics.add.collider(this.player.body, this.vendor.body);
     this.player.on('hp', () => this.updateHearts(true));
     this.player.on('stats', (stats: Stats) => this.updateStats(stats));
+    this.player.loadActive(this.run.active);
+    this.player.on('active', () => this.updateActiveHud(true));
     this.player.on('dead', () => this.showGameOver());
 
     // Salas com inimigos: fecha as portas até limpar
@@ -348,7 +374,12 @@ export class RoomScene extends Phaser.Scene {
     kb.addCapture([K.UP, K.DOWN, K.LEFT, K.RIGHT]); // não rolar a página com as setas
     kb.on('keydown-ESC', () => this.backToSelect());
     kb.on('keydown-E', () => this.placeBomb());
-    this.touch = isTouchDevice(this) ? new TouchControls(this, () => this.placeBomb()) : undefined;
+    kb.on('keydown-SPACE', () => this.useActive());
+    kb.on('keydown-Q', () => this.useActive());
+    kb.addCapture([K.SPACE]);
+    this.touch = isTouchDevice(this)
+      ? new TouchControls(this, () => this.placeBomb(), () => this.useActive())
+      : undefined;
 
     this.createHud();
 
@@ -447,6 +478,7 @@ export class RoomScene extends Phaser.Scene {
     this.checkItems(time);
     this.checkPickups(time);
     this.updateBombs(dt, time);
+    if (this.player.active && this.player.activeCharge < 1) this.updateActiveHud(false);
     this.checkTrapdoor();
     this.checkDoors();
   }
@@ -805,6 +837,7 @@ export class RoomScene extends Phaser.Scene {
   private saveRoom() {
     this.run.hp = this.player.hp;
     this.run.shield = this.player.shield;
+    this.run.active = this.player.active ? { id: this.player.active.id, charge: this.player.activeCharge } : undefined;
     this.roomState.items = this.items.filter((i) => !i.collected).map((i) => ({ id: i.info.id, x: i.x, y: i.y, price: i.price }));
     this.roomState.pickups = this.pickups.filter((p) => !p.collected).map((p) => ({ kind: p.kind, x: p.x, y: p.y, tag: p.tag }));
     if (this.chest) this.roomState.chestOpen = this.chest.opened;
@@ -878,7 +911,10 @@ export class RoomScene extends Phaser.Scene {
       this.roomState.cleared = false;
       this.roomState.chestOpen = false;
       this.roomState.scorches = [];
+      this.roomState.pickups = this.roomState.pickups.filter((p) => p.kind !== 'bomb');
+      this.roomState.items = [];
       this.leaving = true;
+      this.devBombsOnRestart = true;
       this.scene.restart({ run: this.run, room: this.roomId } satisfies RoomData);
       return;
     }
@@ -891,6 +927,14 @@ export class RoomScene extends Phaser.Scene {
       return;
     }
     const spawn: ItemSpawn = animate ? { kind: 'pop' } : { kind: 'none' };
+    if (this.roomDef.type === 'devActives') {
+      for (const [id, col, row] of DEV_ACTIVE_ITEMS) {
+        if (this.items.some((i) => !i.collected && i.info.id === id)) continue;
+        const { x, y } = tileCenter(col, row);
+        this.items.push(new ItemPickup(this, x, y, id, spawn));
+      }
+      return;
+    }
     for (const [id, col, row] of TEST_ITEMS) {
       if (this.items.some((i) => !i.collected && i.info.id === id)) continue;
       const x = FLOOR.x + (col + 0.5) * TILE;
@@ -1071,7 +1115,9 @@ export class RoomScene extends Phaser.Scene {
       if (!this.player.dead && item.touches(feet.x, feet.y)) {
         if (item.price !== undefined && !this.tryBuy(item)) continue;
         item.collect(feet.x, feet.y);
-        this.player.collect(item.info);
+        const old = this.player.collect(item.info);
+        // Trocou de item usável: o antigo fica no chão onde estava o novo
+        if (old) this.items.push(new ItemPickup(this, item.x, item.y, old.id, { kind: 'drop' }));
         const rarity = RARITY_INFO[item.info.rarity];
         this.showBanner(item.info.name, `${item.info.effect}  ·  ${rarity.name}`, rarity.color);
       }
@@ -1110,9 +1156,74 @@ export class RoomScene extends Phaser.Scene {
   private createHud() {
     this.createCounters();
     this.updateHearts(false);
+    this.createActiveHud();
     this.createTopButtons();
     if (this.isDev) this.createStatsPanel();
     else this.createMinimap();
+  }
+
+  // ---------- Item usável ----------
+
+  private useActive() {
+    if (this.leaving || this.finished) return;
+    const item = this.player.active;
+    if (!item?.active) return;
+    if (!this.player.useActive()) {
+      if (this.time.now >= this.nagUntil) {
+        this.nagUntil = this.time.now + 800;
+        this.showBanner(item.name, 'Ainda recarregando…', '#c8c0b8');
+      }
+      return;
+    }
+    const what = item.active.effect === 'invincible' ? 'Imortal' : 'Dano 2x';
+    this.showBanner(item.name, `${what} por ${item.active.duration} segundos!`, '#f2c879');
+  }
+
+  /** Slot do item usável, embaixo dos contadores: ícone, barra de recarga e a tecla. */
+  private createActiveHud() {
+    const { x, y } = this.activeSlotPosition();
+    const box = this.add.rectangle(x, y, 44, 44, 0x120e0c, 0.7).setStrokeStyle(2, 0x8a7a6a).setDepth(20_000);
+    const icon = this.add.image(x, y - 1, 'actives', 0).setScale(0.58).setDepth(20_001);
+    const bar = this.add.rectangle(x - 20, y + 26, 40, 5, 0xf2c879).setOrigin(0, 0.5).setDepth(20_001);
+    const label = this.add
+      .text(x + 28, y, this.touch ? '' : 'Espaço', { fontFamily: 'monospace', fontSize: '11px', color: '#8a7a6a' })
+      .setOrigin(0, 0.5)
+      .setDepth(20_001);
+    this.activeHud = { box, icon, bar, label };
+    this.updateActiveHud(false);
+  }
+
+  private activeSlotPosition() {
+    const keyRow = this.counterPosition('key');
+    return { x: 48, y: keyRow.y + 42 };
+  }
+
+  private updateActiveHud(bump: boolean) {
+    const hud = this.activeHud;
+    if (!hud) return;
+    const item = this.player.active;
+    const visible = !!item;
+    for (const o of [hud.box, hud.icon, hud.bar, hud.label]) o.setVisible(visible);
+    this.touch?.setActive(item ? item.frame : null, this.player.activeCharge >= 1);
+    if (!item) return;
+    hud.icon.setFrame(item.frame);
+    const ready = this.player.activeCharge >= 1;
+    hud.bar.width = 40 * this.player.activeCharge;
+    hud.bar.setFillStyle(ready ? 0xf2c879 : 0x6a5a4a);
+    hud.icon.setAlpha(ready ? 1 : 0.5);
+    hud.box.setStrokeStyle(2, ready ? 0xf2c879 : 0x8a7a6a);
+    if (bump) {
+      hud.icon.setScale(0.8);
+      this.tweens.add({ targets: hud.icon, scale: 0.58, duration: 250, ease: 'Back.Out' });
+    }
+  }
+
+  /** Bombas de teste na sala de obstáculos (modo desenvolvedor). */
+  private addDevBombs() {
+    for (const [col, row] of DEV_PROPS_BOMBS) {
+      const { x, y } = tileCenter(col, row);
+      this.pickups.push(new Pickup(this, x, y, 'bomb', false));
+    }
   }
 
   /** Contadores de moedas, bombas e chaves embaixo dos corações (como no Isaac). */
@@ -1178,6 +1289,13 @@ export class RoomScene extends Phaser.Scene {
     }
     const g = this.counterPosition('goldenKey');
     this.goldenKeyIcon?.setPosition(g.x, g.y);
+    if (this.activeHud) {
+      const { x, y } = this.activeSlotPosition();
+      this.activeHud.box.setPosition(x, y);
+      this.activeHud.icon.setPosition(x, y - 1);
+      this.activeHud.bar.setPosition(x - 20, y + 26);
+      this.activeHud.label.setPosition(x + 28, y);
+    }
   }
 
   private updateCounters(bump?: PickupKind) {

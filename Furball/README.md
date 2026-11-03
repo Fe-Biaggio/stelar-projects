@@ -50,7 +50,8 @@ rápido):
 O morcego vem da folha 3; rato, cachorro, pássaro e humano foram desenhados por
 `tools/draw_bosses.py` (troque os PNGs em `public/assets/boss_*.png` por artes próprias).
 
-Controles: **WASD** para andar, **setas** para cuspir bolas de pelo, **E** para colocar bomba. O botão **Início**
+Controles: **WASD** para andar, **setas** para cuspir bolas de pelo, **E** para colocar bomba,
+**Espaço** (ou **Q**) para usar o item usável. O botão **Início**
 (canto superior direito) ou **Esc** volta à seleção a qualquer momento. Depois de perder,
 **R** recomeça com o mesmo gato. Adicione `?debug` na URL para ver as colisões.
 
@@ -140,10 +141,53 @@ O painel de status mostra as chances atuais. Na sala do tesouro, o botão
 **+ Novo baú** fecha o baú de novo para testar várias aberturas. As salas guardam o que ficou
 nelas (baú aberto, itens no chão) quando o gato sai e volta.
 
+### Salas: pedras, buracos e móveis
+
+As salas comuns sorteiam elementos numa grade de 13x7 (sempre deixando as portas e o centro
+livres e todo o chão conectado):
+
+- **Pedra** – bloqueia o gato, os inimigos de chão e as bolas de pelo. Uma bomba por perto quebra.
+- **Buraco** – o gato e os inimigos de chão não atravessam (sem cair); quem voa passa por cima.
+- **Cadeira** – o gato sobe nela; inimigos de chão desviam.
+- **Mesa** – só dá para subir vindo de uma cadeira. Em cima da mesa, só inimigos que voam (e os
+  tiros deles) alcançam o gato; o acerto de um deles pode derrubá-lo da mesa. Andar para fora
+  da mesa desce sem dano.
+- A bomba destrói pedra, cadeira e mesa: viram destroços no chão e dá para passar por cima
+  (eles não são empurrados, ao contrário dos itens).
+
+### Baús, drops e bombas
+
+- Cada nível tem pelo menos 2 salas comuns com baú (3 a partir do nível 3). O **baú de madeira**
+  abre sem chave e solta 2 ou 3 coletáveis (10% de chance de um item); o **dourado** precisa de
+  chave e dá um item pela raridade.
+- Uma bomba abre qualquer baú; no dourado, as chances de item bom caem (até a metade).
+- Uma bomba numa **porta trancada** tem 50% de abrir na hora; se não abrir, a porta racha e a
+  próxima bomba abre com certeza.
+- Inimigos soltam algo ao morrer: moeda 50%, chave 5%, bomba 5%, item 5%.
+
+### Itens usáveis
+
+Um por vez (pegar outro troca, e o antigo fica no chão). Use com Espaço/Q ou o botão na tela;
+depois recarregam. O slot fica embaixo das chaves, com a barra de recarga.
+
+| Item | Efeito | Recarga |
+|---|---|---|
+| Coleira | imortal por 5 s | 30 s |
+| Patinha | dano 2x por 5 s | 20 s |
+
+### Salas de teste (modo desenvolvedor)
+
+A partir da sala de testes: **direita** tesouro (baú dourado), **cima** loja (trancada; dá
+para abrir com chave ou bomba), **esquerda** sala de obstáculos (mesa, cadeiras, pedras,
+buracos, baú de madeira, uma mosca, uma cabeça pálida e 3 bombas) e **baixo** sala dos itens
+usáveis (coleira, patinha, gato de teste e espinhos). O botão **+ Repor** de cada sala põe
+tudo de volta.
+
 ### Jogar no celular
 
 Em telas de toque aparecem controles na tela: analógico na metade esquerda (nasce onde o
-dedo encosta) para andar, 4 botões de tiro em losango à direita e o botão de bomba. Na
+dedo encosta) para andar, 4 botões de tiro em losango à direita, o botão de bomba e, acima
+dele, o botão do item usável (quando você tem um). Na
 seleção, o primeiro toque escolhe o gato e o segundo começa. Com o celular em pé, a página
 pede para girar.
 
@@ -179,7 +223,8 @@ um print do jogo em `screenshots/` (fora do git), para enviar capturas durante o
 
 Para regerar os sprites a partir das folhas: `python tools/extract_cats.py`,
 `python tools/extract_ui.py`, `python tools/extract_items.py`, `python tools/extract_pickups.py`
-`python tools/extract_enemies.py` e `python tools/draw_bosses.py`.
+`python tools/extract_enemies.py`, `python tools/draw_bosses.py`, `python tools/draw_props.py`
+e `python tools/draw_actives.py`.
 
 ## Núcleo do jogo (MVP)
 

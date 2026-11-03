@@ -59,6 +59,8 @@ export interface Run {
   /** Escudo dos corações azuis, em pontos. Não se recupera. */
   shield: number;
   inventory: Inventory;
+  /** Item usável carregado (só um por vez) e quanto já recarregou (0 a 1). */
+  active?: { id: ItemId; charge: number };
   /** Nível (andar) atual. A chave dourada só vale no nível em que foi pega. */
   level: number;
   /** Mapa do nível atual. */

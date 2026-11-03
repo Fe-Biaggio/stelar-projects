@@ -3,7 +3,16 @@ import { STAT_STEP, Stats } from './stats';
 
 // Itens coletáveis. O frame é a posição em public/assets/items.png (tools/extract_items.py).
 
-export type ItemId = 'can' | 'catnip' | 'brush' | 'churu' | 'yarn' | 'fish' | 'milk';
+export type ItemId = 'can' | 'catnip' | 'brush' | 'churu' | 'yarn' | 'fish' | 'milk' | 'collar' | 'paw';
+
+/** Efeito de um item usável (ativado com um botão, por um tempo). */
+export interface ActiveEffect {
+  effect: 'invincible' | 'doubleDamage';
+  /** Quanto tempo o efeito dura (segundos). */
+  duration: number;
+  /** Quanto tempo para poder usar de novo (segundos). */
+  recharge: number;
+}
 
 export interface ItemInfo {
   id: ItemId;
@@ -11,8 +20,13 @@ export interface ItemInfo {
   /** Texto curto mostrado ao pegar o item. */
   effect: string;
   frame: number;
-  stat: keyof Stats;
+  /** Status que o item passivo aumenta (itens usáveis não têm). */
+  stat?: keyof Stats;
   rarity: Rarity;
+  /** Folha de sprites do item ("items" para passivos, "actives" para usáveis). */
+  texture?: 'items' | 'actives';
+  /** Itens usáveis: o que acontece ao apertar o botão. */
+  active?: ActiveEffect;
 }
 
 const plus = `+${String(STAT_STEP).replace('.', ',')}x`;
@@ -25,6 +39,25 @@ export const ITEMS: Record<ItemId, ItemInfo> = {
   yarn: { id: 'yarn', name: 'Bolinha de lã', effect: `Velocidade do tiro ${plus}`, frame: 4, stat: 'shotSpeed', rarity: 'common' },
   fish: { id: 'fish', name: 'Peixe fresco', effect: `Dano ${plus}`, frame: 5, stat: 'damage', rarity: 'epic' },
   milk: { id: 'milk', name: 'Leitinho', effect: `Bola de pelo maior ${plus}`, frame: 6, stat: 'size', rarity: 'uncommon' },
+  // Itens usáveis (Espaço/Q ou o botão na tela)
+  collar: {
+    id: 'collar',
+    name: 'Coleira',
+    effect: 'Usável: imortal por 5 s',
+    frame: 0,
+    texture: 'actives',
+    rarity: 'rare',
+    active: { effect: 'invincible', duration: 5, recharge: 30 },
+  },
+  paw: {
+    id: 'paw',
+    name: 'Patinha',
+    effect: 'Usável: dano 2x por 5 s',
+    frame: 1,
+    texture: 'actives',
+    rarity: 'uncommon',
+    active: { effect: 'doubleDamage', duration: 5, recharge: 20 },
+  },
 };
 
 /** Sorteia um item da raridade pedida. */
@@ -35,6 +68,7 @@ export function randomItemOf(rarity: Rarity, rng: () => number = Math.random): I
 
 /** Aplica o efeito do item nos status. A vida é tratada pelo Player (ganha e cura 1 coração). */
 export function applyItem(stats: Stats, item: ItemInfo) {
+  if (!item.stat) return; // itens usáveis não mexem nos status
   if (item.stat === 'maxHp') stats.maxHp += 1;
   else stats[item.stat] = Math.round((stats[item.stat] + STAT_STEP) * 10) / 10;
 }

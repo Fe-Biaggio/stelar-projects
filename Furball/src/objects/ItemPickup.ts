@@ -10,7 +10,12 @@ const SPAWN_GRACE = 500; // ms em que um item recém-aparecido ainda não pode s
 const TOSS_TIME = 550; // ms do arco do item saindo do baú
 
 /** Como o item aparece: já no chão, com um "pop", ou arremessado de um ponto (o baú). */
-export type ItemSpawn = { kind: 'none' } | { kind: 'pop' } | { kind: 'toss'; fromX: number; fromY: number };
+export type ItemSpawn =
+  | { kind: 'none' }
+  | { kind: 'pop' }
+  | { kind: 'toss'; fromX: number; fromY: number }
+  /** Largado pelo gato (troca de item usável): só pode ser pego de novo depois que ele se afastar. */
+  | { kind: 'drop' };
 
 /** Item parado no chão, flutuando, esperando o gato passar por cima. */
 export class ItemPickup {
@@ -24,6 +29,8 @@ export class ItemPickup {
   private readonly readyAt: number;
   /** Enquanto o item voa do baú, o balanço fica desligado. */
   private landed = true;
+  /** Falso enquanto o gato não se afastou do item que acabou de largar. */
+  private armed = true;
 
   constructor(
     private readonly scene: Phaser.Scene,
@@ -48,7 +55,7 @@ export class ItemPickup {
     }
     this.shadow = scene.add.ellipse(x, y, 34, 10, 0x000000, 0.3).setDepth(y - 1);
     this.sprite = scene.add
-      .image(x, y, 'items', this.info.frame)
+      .image(x, y, this.info.texture ?? 'items', this.info.frame)
       .setOrigin(0.5, 1)
       .setScale(ITEM_SCALE)
       .setDepth(y);
@@ -62,7 +69,8 @@ export class ItemPickup {
       this.priceTag = scene.add.container(x, y + 20, [coin, value]).setDepth(y + 1);
     }
 
-    if (spawn.kind === 'pop') {
+    if (spawn.kind === 'drop') this.armed = false;
+    if (spawn.kind === 'pop' || spawn.kind === 'drop') {
       this.sprite.setScale(0);
       scene.tweens.add({ targets: this.sprite, scale: ITEM_SCALE, duration: 300, ease: 'Back.Out' });
     } else if (spawn.kind === 'toss') {
@@ -139,7 +147,12 @@ export class ItemPickup {
 
   touches(px: number, py: number) {
     if (this.collected || this.scene.time.now < this.readyAt) return false;
-    return Phaser.Math.Distance.Between(px, py, this.x, this.y) < PICKUP_RADIUS;
+    const d = Phaser.Math.Distance.Between(px, py, this.x, this.y);
+    if (!this.armed) {
+      if (d > PICKUP_RADIUS + 16) this.armed = true;
+      return false;
+    }
+    return d < PICKUP_RADIUS;
   }
 
   /** Sobe por cima da cabeça do gato e some (como no Isaac). */

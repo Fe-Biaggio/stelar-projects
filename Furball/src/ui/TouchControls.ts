@@ -41,10 +41,13 @@ export class TouchControls {
   /** Botões de tiro pressionados, com o momento em que foram tocados (o último manda). */
   private readonly aimHeld = new Map<number, { dir: Facing; at: number }>();
   private readonly aimButtons = new Map<Facing, Phaser.GameObjects.Container>();
+  private readonly useButton: Phaser.GameObjects.Container;
+  private readonly useIcon: Phaser.GameObjects.Image;
 
   constructor(
     private readonly scene: Phaser.Scene,
     onBomb: () => void,
+    onUse: () => void,
   ) {
     scene.input.addPointer(3); // até 4 dedos ao mesmo tempo
 
@@ -77,6 +80,16 @@ export class TouchControls {
       scene.tweens.add({ targets: bomb, scale: 0.85, duration: 70, yoyo: true });
     });
 
+    // Botão do item usável (só aparece quando o gato tem um)
+    const useBg = scene.add.circle(0, 0, 30, 0x000000, 0.3).setStrokeStyle(3, 0xf2c879, 0.6);
+    this.useIcon = scene.add.image(0, 0, 'actives', 0).setScale(0.6);
+    this.useButton = scene.add.container(BOMB_X, BOMB_Y - 76, [useBg, this.useIcon]).setDepth(DEPTH).setVisible(false);
+    this.useButton.setSize(70, 70).setInteractive();
+    this.useButton.on('pointerdown', () => {
+      onUse();
+      scene.tweens.add({ targets: this.useButton, scale: 0.85, duration: 70, yoyo: true });
+    });
+
     scene.input.on('pointerdown', this.onDown, this);
     scene.input.on('pointermove', this.onMove, this);
     scene.input.on('pointerup', this.onUp, this);
@@ -87,6 +100,13 @@ export class TouchControls {
       scene.input.off('pointerup', this.onUp, this);
       scene.input.off('pointerupoutside', this.onUp, this);
     });
+  }
+
+  /** Mostra o botão de usar com o ícone do item (frame em actives.png); `ready` = carregado. */
+  setActive(frame: number | null, ready: boolean) {
+    this.useButton.setVisible(frame !== null);
+    if (frame !== null) this.useIcon.setFrame(frame);
+    this.useButton.setAlpha(ready ? 1 : 0.45);
   }
 
   /** Direção do tiro enquanto um botão de tiro está pressionado (o último tocado manda). */

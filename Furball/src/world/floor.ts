@@ -2,7 +2,7 @@ import { DoorSide } from './room';
 
 // Mapa de um nível: salas numa grade, ligadas pelas portas dos lados (como no Isaac).
 
-export type RoomType = 'devStart' | 'devProps' | 'start' | 'normal' | 'treasure' | 'shop' | 'boss';
+export type RoomType = 'devStart' | 'devProps' | 'devActives' | 'start' | 'normal' | 'treasure' | 'shop' | 'boss';
 
 /** Baú numa sala comum: "wood" abre sem chave; "gold" precisa de chave. */
 export type ChestKind = 'wood' | 'gold';
@@ -53,6 +53,7 @@ export function devFloor(): FloorMap {
   add(1, 0, 'treasure');
   add(0, -1, 'shop', true);
   add(-1, 0, 'devProps');
+  add(0, 1, 'devActives');
   rooms[roomKey(-1, 0)].chest = 'wood';
   return { rooms, startId: roomKey(0, 0) };
 }

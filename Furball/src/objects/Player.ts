@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { CAT_FRAME_W, CATS, CatId } from '../cats';
-import { ItemInfo, applyItem } from '../items';
+import { ITEMS, ItemInfo, applyItem } from '../items';
 import { HP_PER_HEART, Stats } from '../stats';
 
 export type Facing = 'down' | 'up' | 'left' | 'right';
@@ -63,6 +63,12 @@ export class Player extends Phaser.Events.EventEmitter {
   private fireCooldown = 0;
   private mouthTimer = 0;
   private invulnerable = 0;
+  /** Item usável carregado e quanto recarregou (1 = pronto). */
+  active?: ItemInfo;
+  activeCharge = 1;
+  /** Tempo restante dos efeitos dos itens usáveis (segundos). */
+  invincibleTime = 0;
+  damageBoostTime = 0;
   /** Altura em que o gato está (subido na cadeira ou na mesa), em pixels. */
   private liftTarget = 0;
   private lift = 0;
@@ -137,6 +143,7 @@ export class Player extends Phaser.Events.EventEmitter {
     if (this.dead) return null;
 
     this.fireCooldown = Math.max(0, this.fireCooldown - dt);
+    this.updateActive(dt, time);
     this.mouthTimer = Math.max(0, this.mouthTimer - dt);
     this.updateInvulnerability(dt);
 
@@ -170,7 +177,8 @@ export class Player extends Phaser.Events.EventEmitter {
         height: mh + groundOffset + this.lift,
         dir: dir.clone(),
         inherited: v.clone(),
-        stats: this.stats,
+        // Com a patinha ativa, o dano dobra só nos tiros feitos durante o efeito
+        stats: this.damageBoostTime > 0 ? { ...this.stats, damage: this.stats.damage * 2 } : this.stats,
       };
       // Pequeno "solavanco" ao cuspir
       this.scene.tweens.add({
@@ -189,7 +197,7 @@ export class Player extends Phaser.Events.EventEmitter {
 
   /** Tira vida e empurra o gato para longe de (fromX, fromY). */
   takeDamage(amount: number, fromX: number, fromY: number) {
-    if (this.dead || this.invulnerable > 0) return;
+    if (this.dead || this.invulnerable > 0 || this.invincibleTime > 0) return;
     // O escudo azul absorve o dano primeiro
     const fromShield = Math.min(this.shield, amount);
     this.shield -= fromShield;
@@ -239,7 +247,16 @@ export class Player extends Phaser.Events.EventEmitter {
   }
 
   /** Pega um item: aplica nos status e faz o gato comemorar. */
-  collect(item: ItemInfo) {
+  collect(item: ItemInfo): ItemInfo | undefined {
+    if (item.active) {
+      // Item usável: fica no slot (troca com o que tinha, que é devolvido para ir ao chão)
+      const old = this.active;
+      this.active = item;
+      this.activeCharge = 1;
+      this.emit('active');
+      this.scene.tweens.add({ targets: this.sprite, scaleY: SPRITE_SCALE * 1.15, duration: 110, yoyo: true });
+      return old;
+    }
     applyItem(this.stats, item);
     if (item.stat === 'maxHp') {
       this.hp += HP_PER_HEART; // a lata também enche o coração novo
@@ -270,6 +287,41 @@ export class Player extends Phaser.Events.EventEmitter {
     });
     this.scene.tweens.add({ targets: this.shadow, scaleX: 1.4, duration: 380 });
     this.emit('dead');
+  }
+
+  /** Carrega um item usável salvo na partida (ao trocar de sala). */
+  loadActive(saved?: { id: string; charge: number }) {
+    if (!saved) return;
+    this.active = ITEMS[saved.id as keyof typeof ITEMS];
+    this.activeCharge = saved.charge;
+  }
+
+  /** Usa o item usável, se estiver carregado. */
+  useActive() {
+    if (this.dead || !this.active?.active || this.activeCharge < 1) return false;
+    const { effect, duration } = this.active.active;
+    if (effect === 'invincible') this.invincibleTime = duration;
+    else this.damageBoostTime = duration;
+    this.activeCharge = 0;
+    this.emit('active');
+    this.scene.tweens.add({ targets: this.sprite, scaleX: SPRITE_SCALE * 1.25, scaleY: SPRITE_SCALE * 1.25, duration: 120, yoyo: true });
+    return true;
+  }
+
+  /** Recarga do item usável e brilho dos efeitos ativos. */
+  private updateActive(dt: number, time: number) {
+    if (this.active?.active && this.activeCharge < 1) {
+      const before = this.activeCharge;
+      this.activeCharge = Math.min(1, this.activeCharge + dt / this.active.active.recharge);
+      if (before < 1 && this.activeCharge >= 1) this.emit('active');
+    }
+    this.invincibleTime = Math.max(0, this.invincibleTime - dt);
+    this.damageBoostTime = Math.max(0, this.damageBoostTime - dt);
+    if (this.invulnerable > 0) return; // o pisca-pisca do dano tem prioridade
+    const pulse = (Math.sin(time / 90) + 1) / 2;
+    if (this.invincibleTime > 0) this.sprite.setTint(Phaser.Display.Color.GetColor(255, 220 + pulse * 35, 120 + pulse * 100));
+    else if (this.damageBoostTime > 0) this.sprite.setTint(Phaser.Display.Color.GetColor(255, 120 + pulse * 80, 120 + pulse * 80));
+    else if (this.sprite.isTinted) this.sprite.clearTint();
   }
 
   private updateInvulnerability(dt: number) {
