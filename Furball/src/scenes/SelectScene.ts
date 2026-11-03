@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { BTN, PadInput } from '../ui/Gamepad';
 import { CATS, CatId, PLAYABLE } from '../cats';
 import { GAME_HEIGHT, GAME_WIDTH } from '../config';
 import { GameMode } from '../run';
@@ -19,6 +20,7 @@ interface Slot {
 
 /** Tela inicial: escolha do gato com ←/→ (ou A/D, ou mouse) e Enter para jogar. */
 export class SelectScene extends Phaser.Scene {
+  private readonly pad = new PadInput();
   private slots: Slot[] = [];
   private index = 0;
   private nameText!: Phaser.GameObjects.Text;
@@ -105,6 +107,15 @@ export class SelectScene extends Phaser.Scene {
 
     this.select(this.index, true);
     this.cameras.main.fadeIn(250);
+  }
+
+  update() {
+    this.pad.poll();
+    const dir = this.pad.menuDir();
+    if (dir === 'left') this.select((this.index + PLAYABLE.length - 1) % PLAYABLE.length);
+    if (dir === 'right') this.select((this.index + 1) % PLAYABLE.length);
+    if (this.pad.pressed(BTN.A) || this.pad.pressed(BTN.START)) this.start();
+    if (this.pad.pressed(BTN.B)) this.scene.start('Title', { mode: this.mode });
   }
 
   private select(i: number, force = false) {

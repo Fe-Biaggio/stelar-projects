@@ -23,6 +23,8 @@ export interface RoomDef {
   chest?: ChestKind;
   /** Sala com um gatinho pedinte ou vampiro (sem inimigos). */
   npc?: NpcKind;
+  /** Sala comum com um item de graça no meio. */
+  item?: boolean;
 }
 
 export interface FloorMap {
@@ -38,6 +40,7 @@ export const roomKey = (gx: number, gy: number) => `${gx},${gy}`;
 export function neighbors(floor: FloorMap, id: string): Partial<Record<DoorSide, string>> {
   const r = floor.rooms[id];
   const out: Partial<Record<DoorSide, string>> = {};
+  if (!r) return out; // sala de outro nível (não deveria acontecer, mas não pode travar)
   for (const side of Object.keys(STEP) as DoorSide[]) {
     const [dx, dy] = STEP[side];
     const key = roomKey(r.gx + dx, r.gy + dy);
@@ -131,10 +134,15 @@ export function generateFloor(level: number, rng: () => number = Math.random): F
       const room = normals.splice(Math.floor(rng() * normals.length), 1)[0];
       room.chest = i === 0 || rng() < 0.5 ? 'wood' : 'gold';
     }
+    // Pelo menos 2 salas comuns com um item no meio (sem baú)
+    for (let i = 0; i < 2; i++) {
+      const free = Object.values(rooms).filter((r) => r.type === 'normal' && !r.chest && !r.item);
+      if (free.length) free[Math.floor(rng() * free.length)].item = true;
+    }
     // Gatinhos (30% cada, no máximo um de cada por nível), em salas comuns sem baú
     for (const kind of ['beggar', 'vampire'] as NpcKind[]) {
       if (rng() >= NPC_CHANCE) continue;
-      const free = Object.values(rooms).filter((r) => r.type === 'normal' && !r.chest && !r.npc);
+      const free = Object.values(rooms).filter((r) => r.type === 'normal' && !r.chest && !r.npc && !r.item);
       if (free.length) free[Math.floor(rng() * free.length)].npc = kind;
     }
     return { rooms, startId: roomKey(0, 0) };

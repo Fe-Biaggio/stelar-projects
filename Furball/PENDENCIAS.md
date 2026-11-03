@@ -8,6 +8,10 @@ Nada no momento.
 
 ## Feito em 03/11/2026
 
+- [x] Corrigida a trava ao descer de nível.
+- [x] 2 salas com item por nível; mais chaves nos drops.
+- [x] Suporte a controle (gamepad).
+
 - [x] Corrigida a trava ao pegar item no modo jogo (o painel de status só existe no modo dev).
 - [x] Símbolo de boss (caveira com chifres) na porta da sala do boss.
 - [x] Gatinho pedinte e gatinho vampiro (30% por nível cada, sala sem inimigos).

@@ -74,6 +74,7 @@ export class TouchControls {
     const bombBg = scene.add.circle(0, 0, 30, 0x000000, 0.3).setStrokeStyle(3, 0xe8d9c4, 0.45);
     const bombIcon = scene.add.image(0, 4, 'pickups', 1).setScale(0.62);
     const bomb = scene.add.container(BOMB_X, BOMB_Y, [bombBg, bombIcon]).setDepth(DEPTH);
+    this.extra.push(bomb);
     bomb.setSize(70, 70).setInteractive();
     bomb.on('pointerdown', () => {
       onBomb();
@@ -102,9 +103,18 @@ export class TouchControls {
     });
   }
 
+  /** Esconde tudo (quando o jogador passa a usar um controle físico). */
+  hide() {
+    this.hidden = true;
+    for (const o of [this.stickBase, this.stickKnob, this.useButton, ...this.aimButtons.values(), ...this.extra]) o.setVisible(false);
+  }
+
+  private hidden = false;
+  private readonly extra: Phaser.GameObjects.Container[] = [];
+
   /** Mostra o botão de usar com o ícone do item (frame em actives.png); `ready` = carregado. */
   setActive(frame: number | null, ready: boolean) {
-    this.useButton.setVisible(frame !== null);
+    this.useButton.setVisible(frame !== null && !this.hidden);
     if (frame !== null) this.useIcon.setFrame(frame);
     this.useButton.setAlpha(ready ? 1 : 0.45);
   }

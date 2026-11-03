@@ -157,7 +157,7 @@ livres e todo o chão conectado):
 
 ### Baús, drops e bombas
 
-- Cada nível tem pelo menos 2 salas comuns com baú (3 a partir do nível 3). O **baú de madeira**
+- Cada nível tem pelo menos 2 salas comuns com um item de graça no meio e 2 salas comuns com baú (3 a partir do nível 3). O **baú de madeira**
   abre sem chave e solta 2 ou 3 coletáveis (10% de chance de um item); o **dourado** precisa de
   chave e dá um item pela raridade.
 - Uma bomba abre qualquer baú; no dourado, as chances de item bom caem (até a metade).
@@ -198,6 +198,13 @@ buracos, baú de madeira, uma mosca, uma cabeça pálida e 3 bombas) e **baixo**
 usáveis (coleira, patinha, gato de teste e espinhos). Ao lado da sala dos itens usáveis ficam
 o **gatinho pedinte** (esquerda, com 6 moedas) e o **gatinho vampiro** (direita, com 6 corações). O botão **+ Repor** de cada sala põe
 tudo de volta.
+
+### Controle (gamepad)
+
+Funciona com controles no navegador (Xbox, Android, Retroid Pocket etc.): analógico esquerdo
+ou direcional anda; A/B/X/Y ou analógico direito atiram (Y cima, A baixo, X esquerda, B
+direita); L1/L2 bomba; R1/R2 item usável; Start volta ao início. Nos menus: direcional e A
+(B volta). Ao usar o controle, os botões de toque somem.
 
 ### Jogar no celular
 

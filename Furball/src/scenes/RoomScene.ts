@@ -16,6 +16,7 @@ import { HEART_POINTS, PICKUP_FRAME, PickupKind, addPickup, isHeart, useKey } fr
 import { RARITY_INFO, RARITY_ORDER, rarityOdds, rollRarity } from '../rarity';
 import { GameMode, MAX_LEVEL, RoomId, RoomState, Run, newRun, startNextLevel } from '../run';
 import { STAT_LABELS, Stats, formatMult } from '../stats';
+import { BTN, PadInput } from '../ui/Gamepad';
 import { TouchControls, isTouchDevice } from '../ui/TouchControls';
 import { drawScorch, playExplosion } from '../world/explosion';
 import { priceOf, rollShopItems } from '../shop';
@@ -106,7 +107,7 @@ const CLEAR_DROPS: [PickupKind | 'none', number][] = [
   ['coin', 34],
   ['heart', 12],
   ['halfHeart', 10],
-  ['key', 12],
+  ['key', 22],
   ['bomb', 12],
   ['blueHeart', 4],
   ['goldenKey', 2],
@@ -116,7 +117,7 @@ const CLEAR_DROPS: [PickupKind | 'none', number][] = [
 // O que um inimigo solta ao morrer (um sorteio por inimigo; "item" = item sorteado pela sorte).
 const ENEMY_DROPS: [PickupKind | 'item' | 'none', number][] = [
   ['coin', 50],
-  ['key', 5],
+  ['key', 10],
   ['bomb', 5],
   ['item', 5],
   ['none', 35],
@@ -127,7 +128,7 @@ const WOOD_CHEST_DROPS: [PickupKind, number][] = [
   ['coin', 45],
   ['heart', 20],
   ['bomb', 15],
-  ['key', 15],
+  ['key', 25],
   ['blueHeart', 5],
 ];
 const WOOD_CHEST_ITEM_CHANCE = 0.1;
@@ -229,6 +230,7 @@ export class RoomScene extends Phaser.Scene {
   private npc?: Npc;
   private npcCooldownUntil = 0;
   private touch?: TouchControls;
+  private readonly pad = new PadInput();
   /** Desenhos das portas trancadas desta sala, por lado. */
   private locks = new Map<DoorSide, Phaser.GameObjects.Graphics>();
   private cracks = new Map<DoorSide, Phaser.GameObjects.Graphics>();
@@ -292,7 +294,7 @@ export class RoomScene extends Phaser.Scene {
   /** Sem `run`, começa uma partida nova (vinda da seleção ou do R). */
   init(data: RoomData) {
     this.run = data.run ?? newRun(data.cat ?? 'black', data.mode ?? 'dev');
-    this.roomId = data.room ?? this.run.floor.startId;
+    this.roomId = data.room && this.run.floor.rooms[data.room] ? data.room : this.run.floor.startId;
     this.enterFrom = data.enterFrom;
     this.newLevel = !!data.newLevel;
   }
@@ -349,6 +351,10 @@ export class RoomScene extends Phaser.Scene {
     } else if (this.roomDef.chest) {
       // Sala comum com baú no meio (madeira abre sem chave; dourado precisa de chave)
       this.chest = new Chest(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 20, !!this.roomState.chestOpen, this.roomDef.chest);
+    } else if (this.roomDef.item && firstVisit) {
+      // Sala com item de graça no meio (sorteado pela sorte), guardado como item no chão
+      const id = randomItemOf(rollRarity(this.run.stats.luck));
+      this.roomState.items.push({ id, x: GAME_WIDTH / 2, y: GAME_HEIGHT / 2 + 30 });
     } else if (this.roomDef.npc) {
       // Gatinho pedinte ou vampiro (sala sem inimigos)
       const state = (this.roomState.npc ??= { given: 0, gone: false });
@@ -454,8 +460,16 @@ export class RoomScene extends Phaser.Scene {
 
     const k = this.moveKeys;
     this.move.set((k.d.isDown ? 1 : 0) - (k.a.isDown ? 1 : 0), (k.s.isDown ? 1 : 0) - (k.w.isDown ? 1 : 0));
+    // Controle físico: analógico/direcional anda, A/B/X/Y atira, L bomba, R item, Start início
+    this.pad.poll();
+    if (this.pad.used && this.touch) this.touch.hide();
+    const padMove = this.pad.move;
+    if (padMove.x || padMove.y) this.move.set(padMove.x, padMove.y);
+    if (this.pad.pressed(BTN.L1) || this.pad.pressed(BTN.L2)) this.placeBomb();
+    if (this.pad.pressed(BTN.R1) || this.pad.pressed(BTN.R2)) this.useActive();
+    if (this.pad.pressed(BTN.START)) this.backToSelect();
     if (this.touch && this.touch.move.lengthSq() > 0) this.move.copy(this.touch.move);
-    const aim = this.currentAim() ?? this.touch?.aim ?? null;
+    const aim = this.currentAim() ?? this.pad.aim ?? this.touch?.aim ?? null;
 
     if (this.hint && (this.move.lengthSq() > 0 || aim)) {
       const hint = this.hint;
@@ -767,9 +781,10 @@ export class RoomScene extends Phaser.Scene {
     if (Phaser.Math.Distance.Between(feet.x, feet.y, this.trapdoor.x, this.trapdoor.y) > 30) return;
     this.leaving = true;
     this.saveRoom();
-    startNextLevel(this.run);
     this.cameras.main.fadeOut(400);
     this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
+      // Só agora troca o mapa: a sala antiga não pode mais mexer no estado do nível novo
+      startNextLevel(this.run);
       const data: RoomData = { run: this.run, room: this.run.floor.startId, newLevel: true };
       this.scene.restart(data);
     });
@@ -1558,7 +1573,7 @@ export class RoomScene extends Phaser.Scene {
    */
   private createMinimap() {
     const floor = this.run.floor;
-    const visited = new Set(Object.keys(this.run.rooms));
+    const visited = new Set(Object.keys(this.run.rooms).filter((id) => floor.rooms[id]));
     visited.add(this.roomId);
     const known = new Set(visited);
     for (const id of visited) for (const n of Object.values(neighbors(floor, id))) known.add(n!);
@@ -1721,9 +1736,27 @@ export class RoomScene extends Phaser.Scene {
 
     const again: RoomData = { cat: this.cat, mode: this.run.mode };
     this.input.keyboard!.once('keydown-R', () => this.scene.restart(again));
+    this.waitPadButton(() => this.scene.restart(again));
     this.time.delayedCall(1000, () => {
       overlay.setInteractive();
       overlay.once('pointerdown', () => this.scene.restart(again));
+    });
+  }
+
+  /** Depois de um instante, A ou Start no controle executa `action` (fim de jogo/vitória). */
+  private waitPadButton(action: () => void) {
+    this.time.delayedCall(900, () => {
+      const timer = this.time.addEvent({
+        delay: 50,
+        loop: true,
+        callback: () => {
+          this.pad.poll();
+          if (this.pad.pressed(BTN.A) || this.pad.pressed(BTN.START)) {
+            timer.remove();
+            action();
+          }
+        },
+      });
     });
   }
 
@@ -1748,6 +1781,7 @@ export class RoomScene extends Phaser.Scene {
     const kb = this.input.keyboard!;
     const restart: RoomData = { cat: this.cat, mode: this.run.mode };
     kb.once('keydown-R', () => this.scene.restart(restart));
+    this.waitPadButton(() => this.scene.restart(restart));
     // No celular: tocar na tela recomeça (o botão Início continua levando à seleção)
     this.time.delayedCall(900, () => {
       overlay.setInteractive();

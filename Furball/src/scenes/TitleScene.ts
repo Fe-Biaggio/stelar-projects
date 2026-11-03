@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { BTN, PadInput } from '../ui/Gamepad';
 import { GAME_HEIGHT, GAME_WIDTH } from '../config';
 import { GameMode } from '../run';
 import { drawRoom } from '../world/room';
@@ -27,6 +28,7 @@ const BOX_H = 74;
 
 /** Tela inicial: escolhe entre o modo desenvolvedor e o jogo para valer. */
 export class TitleScene extends Phaser.Scene {
+  private readonly pad = new PadInput();
   private index = 1;
   private boxes: Phaser.GameObjects.Container[] = [];
   private choosing = false;
@@ -79,6 +81,14 @@ export class TitleScene extends Phaser.Scene {
 
     this.select(this.index, true);
     this.cameras.main.fadeIn(250);
+  }
+
+  update() {
+    this.pad.poll();
+    const dir = this.pad.menuDir();
+    if (dir === 'up') this.select(0);
+    if (dir === 'down') this.select(1);
+    if (this.pad.pressed(BTN.A) || this.pad.pressed(BTN.START)) this.choose();
   }
 
   private select(i: number, force = false) {
