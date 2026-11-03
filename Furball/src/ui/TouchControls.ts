@@ -3,14 +3,16 @@ import { GAME_HEIGHT, GAME_WIDTH } from '../config';
 import { Facing } from '../objects/Player';
 
 const DEPTH = 45_000;
-const STICK_RADIUS = 62; // até onde o polegar arrasta o analógico
+const STICK_RADIUS = 72; // até onde o polegar arrasta o analógico
 const DEAD_ZONE = 0.18;
-const AIM_X = GAME_WIDTH - 118;
-const AIM_Y = GAME_HEIGHT - 118;
-const AIM_GAP = 58; // distância dos botões de tiro até o centro do losango
-const AIM_SIZE = 25; // raio de cada botão de tiro
-const BOMB_X = GAME_WIDTH - 250;
-const BOMB_Y = GAME_HEIGHT - 66;
+const AIM_GAP = 72; // distância dos botões de tiro até o centro do losango
+const AIM_SIZE = 33; // raio de cada botão de tiro
+const AIM_X = GAME_WIDTH - 24 - AIM_GAP - AIM_SIZE; // losango encostado no canto de baixo
+const AIM_Y = GAME_HEIGHT - 16 - AIM_GAP - AIM_SIZE;
+const ACTION_SIZE = 36; // raio dos botões de bomba e de item
+// Bomba e item ficam à esquerda do losango, um em cima do outro
+const BOMB_X = AIM_X - AIM_GAP - AIM_SIZE - ACTION_SIZE - 26;
+const BOMB_Y = GAME_HEIGHT - 16 - ACTION_SIZE;
 
 const AIM_OFFSETS: Record<Facing, [number, number]> = {
   up: [0, -1],
@@ -37,7 +39,7 @@ export class TouchControls {
   private stickPointer?: number;
   private readonly stickBase: Phaser.GameObjects.Arc;
   private readonly stickKnob: Phaser.GameObjects.Arc;
-  private readonly stickHome = { x: 150, y: GAME_HEIGHT - 120 };
+  private readonly stickHome = { x: 40 + STICK_RADIUS, y: GAME_HEIGHT - 40 - STICK_RADIUS };
   /** Botões de tiro pressionados, com o momento em que foram tocados (o último manda). */
   private readonly aimHeld = new Map<number, { dir: Facing; at: number }>();
   private readonly aimButtons = new Map<Facing, Phaser.GameObjects.Container>();
@@ -57,7 +59,7 @@ export class TouchControls {
       .setStrokeStyle(3, 0xe8d9c4, 0.35)
       .setDepth(DEPTH);
     this.stickKnob = scene.add
-      .circle(this.stickHome.x, this.stickHome.y, 30, 0xe8d9c4, 0.4)
+      .circle(this.stickHome.x, this.stickHome.y, 36, 0xe8d9c4, 0.4)
       .setStrokeStyle(3, 0x1a1210, 0.5)
       .setDepth(DEPTH + 1);
 
@@ -65,27 +67,33 @@ export class TouchControls {
     for (const dir of Object.keys(AIM_OFFSETS) as Facing[]) {
       const [ox, oy] = AIM_OFFSETS[dir];
       const bg = scene.add.circle(0, 0, AIM_SIZE, 0x000000, 0.3).setStrokeStyle(3, 0xe8d9c4, 0.45);
-      const arrow = scene.add.triangle(0, 0, 0, -9, 9, 7, -9, 7, 0xe8d9c4, 0.75).setAngle({ up: 0, right: 90, down: 180, left: 270 }[dir]);
+      // Pontos positivos (0..24): o Phaser centraliza a caixa do triângulo no botão
+      const arrow = scene.add
+        .triangle(0, 0, 12, 0, 24, 20, 0, 20, 0xe8d9c4, 0.8)
+        .setAngle({ up: 0, right: 90, down: 180, left: 270 }[dir]);
       const button = scene.add.container(AIM_X + ox * AIM_GAP, AIM_Y + oy * AIM_GAP, [bg, arrow]).setDepth(DEPTH);
       this.aimButtons.set(dir, button);
     }
 
     // Botão de bomba
-    const bombBg = scene.add.circle(0, 0, 30, 0x000000, 0.3).setStrokeStyle(3, 0xe8d9c4, 0.45);
-    const bombIcon = scene.add.image(0, 4, 'pickups', 1).setScale(0.62);
+    const bombBg = scene.add.circle(0, 0, ACTION_SIZE, 0x000000, 0.3).setStrokeStyle(3, 0xe8d9c4, 0.45);
+    const bombIcon = scene.add.image(0, 3, 'pickups', 1).setScale(0.74);
     const bomb = scene.add.container(BOMB_X, BOMB_Y, [bombBg, bombIcon]).setDepth(DEPTH);
     this.extra.push(bomb);
-    bomb.setSize(70, 70).setInteractive();
+    bomb.setSize(ACTION_SIZE * 2 + 10, ACTION_SIZE * 2 + 10).setInteractive();
     bomb.on('pointerdown', () => {
       onBomb();
       scene.tweens.add({ targets: bomb, scale: 0.85, duration: 70, yoyo: true });
     });
 
     // Botão do item usável (só aparece quando o gato tem um)
-    const useBg = scene.add.circle(0, 0, 30, 0x000000, 0.3).setStrokeStyle(3, 0xf2c879, 0.6);
-    this.useIcon = scene.add.image(0, 0, 'actives', 0).setScale(0.6);
-    this.useButton = scene.add.container(BOMB_X, BOMB_Y - 76, [useBg, this.useIcon]).setDepth(DEPTH).setVisible(false);
-    this.useButton.setSize(70, 70).setInteractive();
+    const useBg = scene.add.circle(0, 0, ACTION_SIZE, 0x000000, 0.3).setStrokeStyle(3, 0xf2c879, 0.6);
+    this.useIcon = scene.add.image(0, 0, 'actives', 0).setScale(0.72);
+    this.useButton = scene.add
+      .container(BOMB_X, BOMB_Y - ACTION_SIZE * 2 - 18, [useBg, this.useIcon])
+      .setDepth(DEPTH)
+      .setVisible(false);
+    this.useButton.setSize(ACTION_SIZE * 2 + 10, ACTION_SIZE * 2 + 10).setInteractive();
     this.useButton.on('pointerdown', () => {
       onUse();
       scene.tweens.add({ targets: this.useButton, scale: 0.85, duration: 70, yoyo: true });
@@ -144,7 +152,7 @@ export class TouchControls {
 
   private aimAt(x: number, y: number): Facing | null {
     for (const [dir, b] of this.aimButtons) {
-      if (Phaser.Math.Distance.Between(x, y, b.x, b.y) < AIM_SIZE + 14) return dir;
+      if (Phaser.Math.Distance.Between(x, y, b.x, b.y) < AIM_SIZE + 12) return dir;
     }
     return null;
   }

@@ -216,6 +216,12 @@ Quatro itens mudam a bola de pelo (e se combinam):
 Fogueiras aparecem nas salas como pedras e buracos (mesmo tamanho): bloqueiam a passagem e
 encostar tira meio coração. A bomba apaga a fogueira, e uma bola congelada ou molhada também;
 a bola de pelo comum apaga com 3 acertos (a chama diminui a cada um).
+
+**Rachaduras:** 20% das salas comuns têm uma marca sutil no chão. Com a sala sem inimigos, pise
+nela e aperte o botão de ação (A ou X no controle, F ou Espaço no teclado, ou toque no aviso
+"Cavar"): o gato faz xixi, cava enterrando o xixi e acha um item (a sorte ajuda). Cada
+rachadura vale uma vez. Na sala de obstáculos do modo dev há uma. Sprites de
+`tools/draw_dig.py`.
 Sprites desenhados por `tools/draw_elements.py`.
 
 No modo desenvolvedor, à direita da sala do baú há duas salas com todos os itens do jogo
@@ -260,11 +266,18 @@ hospeda começa quando todos estiverem prontos.
   cada jogador aparece embaixo do gato. Quem cai assiste os outros (bomba ou item troca de
   gato). No fim, o placar mostra criaturas e bosses derrotados, itens passivos pegos e a
   pontuação (criatura 10, item 50, boss 200): o vencedor fica sempre em 1º, os outros pela
-  pontuação, e a estrela marca a maior. Qualquer jogador (R, A ou toque) leva todos de volta
-  para a sala de espera.
+  pontuação, e a estrela marca a maior. A partida só termina quando sobra o último gato; aí
+  quem hospeda leva todos de volta para a sala de espera. **Recomeçar (teste)**: botão
+  temporário de quem hospeda que recomeça na hora com os mesmos jogadores (sai na versão
+  final).
 - **Bots:** na sala de espera, quem hospeda pode adicionar bots no lugar de jogadores (co-op ou
   VS). O bot pega um gato livre aleatório e joga sozinho: mira alinhando com o alvo, segue o
-  parceiro no co-op e anda rumo ao centro no VS.
+  parceiro no co-op e anda rumo ao centro no VS, desviando dos obstáculos.
+- **Simular partidas (só no `npm run dev`):** no console do navegador,
+  `furballDev.simMany([[4,12,12],[3,10,10],[2,8,8]], 6)` roda partidas VS só com bots
+  (inclusive no lugar de quem hospeda), acelerando o relógio fora do aviso de 10 s, e anota em
+  `furballDev.sims` gatos parados por 12 s, salas em combate por mais de 60 s e quem caiu
+  (`src/dev/simVs.ts`).
 
 Como funciona: conexão direta entre os aparelhos (WebRTC com [PeerJS](https://peerjs.com/);
 o servidor gratuito do PeerJS só apresenta os aparelhos). Quem hospeda roda o jogo inteiro e

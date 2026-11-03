@@ -81,14 +81,14 @@ export class BotBrain {
       else if (Math.abs(dx) < ALIGN) aim = dy > 0 ? 'down' : 'up';
       const canShoot = !!aim && dist < 420 && v.clear(target);
       this.noShot = canShoot ? 0 : this.noShot + THINK;
-      if (dist < TOO_CLOSE) {
+      // Sem conseguir atirar faz tempo (inimigo encalhado atrás de pedra): aceita chegar mais perto
+      if (dist < (this.noShot > 3 ? 70 : TOO_CLOSE)) {
         // Perto demais: se afasta
         mx = -Math.sign(dx);
         my = -Math.sign(dy);
       } else if (this.noShot > 3) {
         // Faz tempo que não consegue atirar (pedra no meio, longe demais): vai até o alvo
         [mx, my] = toward(v.me, v.step(target));
-        if (this.noShot > 6) this.noShot = 0;
       } else if (!canShoot) {
         // Vai para a linha ou a coluna do alvo (a mais perto), contornando os obstáculos
         const row = { x: v.me.x, y: target.y };

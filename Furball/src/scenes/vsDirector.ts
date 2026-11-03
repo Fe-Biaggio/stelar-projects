@@ -63,8 +63,14 @@ export class VsDirector {
     return list;
   }
 
+  private sceneSeq = 0;
+
+  /**
+   * Nome único da cena da sala: uma sala que acabou de fechar ainda pode estar sendo removida
+   * pelo Phaser quando outro gato entra nela no mesmo instante (o nome repetido dava erro).
+   */
   private sceneKey(room: string) {
-    return `Room@${room}`;
+    return `Room@${room}#${++this.sceneSeq}`;
   }
 
   /** Põe o gato na sala (cria a cena se ninguém estava lá). */

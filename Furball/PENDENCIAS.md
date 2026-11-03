@@ -8,6 +8,20 @@ Lista do que foi pedido e ainda não está pronto (ou falta testar). Atualizada 
       conectar.
 - [ ] Testar o multiplayer em aparelhos de verdade (celular + PC + Retroid).
 
+## Pendente para a versão final
+
+- [ ] Tirar o botão "Recomeçar (teste)" do multiplayer.
+
+## Feito em 03/11/2026 (rachaduras, testes com bots)
+
+- [x] Rachadura no chão: xixi, cavar e achar um item.
+- [x] Gato nunca entra numa sala em cima de pedra, buraco ou fogueira (acontecia em ~4% das
+      entradas com outro gato na porta).
+- [x] Bots desviam dos obstáculos, saem de salas que vão sumir e contornam pedras para atirar.
+- [x] Só o anfitrião volta para a sala de espera no fim; botão "Recomeçar (teste)".
+- [x] Simulador de partidas VS com bots (`furballDev.simMany`); mapas conferidos: 2.160
+      tabuleiros de 1x1 a 12x12, todas as etapas do encolhimento sem sala isolada.
+
 ## Feito em 03/11/2026 (bots, placar, alcance)
 
 - [x] Sons de acerto e morte de inimigo mais suaves.
