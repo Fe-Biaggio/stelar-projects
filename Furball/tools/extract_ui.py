@@ -1,6 +1,8 @@
-"""Recorta os corações do HUD (folha 2) e gera public/assets/hearts.png.
+"""Gera os sprites de interface: corações do HUD (folha 2) e o baú (folha 4).
 
-Frames: 0 = coração cheio, 1 = coração vazio.
+hearts.png, frames de 32x30:
+  0 = coração vermelho cheio, 1 = vazio, 2 = metade vermelha,
+  3 = coração azul (escudo) cheio, 4 = metade azul.
 """
 from pathlib import Path
 from PIL import Image
@@ -10,15 +12,52 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "art/references/sheet-02-animacoes-mapa.webp"
 OUT = ROOT / "public/assets/hearts.png"
 
-BOXES = [(110, 466, 142, 496), (245, 466, 277, 496)]
+BOXES = [(110, 466, 142, 496), (245, 466, 277, 496)]  # cheio, vazio
 FW, FH = 32, 30
+HALF_X = 16  # onde o coração é cortado ao meio
 
 sheet = Image.open(SRC).convert("RGBA")
-out = Image.new("RGBA", (FW * len(BOXES), FH), (0, 0, 0, 0))
-for i, box in enumerate(BOXES):
+
+
+def crop(box) -> Image.Image:
     frame = np.array(sheet.crop(box))
     frame[frame[:, :, 3] < 60] = 0
-    img = Image.fromarray(frame)
+    return Image.fromarray(frame)
+
+
+def to_blue(img: Image.Image) -> Image.Image:
+    """Troca o vermelho por azul escuro, mantendo o contorno e o brilho."""
+    a = np.array(img).astype(float)
+    bright = a[:, :, :3].max(axis=2)
+    t = np.clip((bright - 60) / 195, 0, 1)[..., None]
+    dark = np.array([8, 12, 45], float)
+    light = np.array([45, 70, 155], float)
+    blue = dark + (light - dark) * t
+    body = (bright > 60) & (a[:, :, 3] > 0)
+    a[body, :3] = blue[body]
+    return Image.fromarray(a.astype(np.uint8))
+
+
+def left_half(img: Image.Image, edge: bool = False) -> Image.Image:
+    """Metade esquerda do coração. Com `edge`, fecha o corte com contorno escuro."""
+    out = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    out.paste(img.crop((0, 0, HALF_X, img.height)), (0, 0))
+    if edge:
+        a = np.array(out)
+        rows = a[:, HALF_X - 3, 3] > 0
+        a[rows, HALF_X - 2 : HALF_X] = (20, 10, 12, 255)
+        out = Image.fromarray(a)
+    return out
+
+
+full, empty = crop(BOXES[0]), crop(BOXES[1])
+half = empty.copy()
+half.alpha_composite(left_half(full))
+blue = to_blue(full)
+frames = [full, empty, half, blue, left_half(blue, edge=True)]
+
+out = Image.new("RGBA", (FW * len(frames), FH), (0, 0, 0, 0))
+for i, img in enumerate(frames):
     out.paste(img, (i * FW, 0), img)
 out.save(OUT)
 print("salvo", OUT, out.size)

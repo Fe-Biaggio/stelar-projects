@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { CAT_FRAME_W, CATS, CatId } from '../cats';
 import { ItemInfo, applyItem } from '../items';
-import { Stats } from '../stats';
+import { HP_PER_HEART, Stats } from '../stats';
 
 export type Facing = 'down' | 'up' | 'left' | 'right';
 
@@ -46,13 +46,16 @@ export interface ShotRequest {
 
 /**
  * O gato jogador. Eventos emitidos:
- *  - 'hp' (hp: number, maxHp: number) quando a vida muda
+ *  - 'hp' (hp, maxHp, shield) quando a vida ou o escudo mudam (em pontos; maxHp em corações)
  *  - 'stats' (stats: Stats) quando um item muda os status
  *  - 'dead' quando a vida chega a zero
  */
 export class Player extends Phaser.Events.EventEmitter {
   readonly body: Phaser.Physics.Arcade.Body;
+  /** Vida vermelha, em pontos (2 por coração). */
   hp: number;
+  /** Escudo azul, em pontos. É perdido antes da vida e não se recupera. */
+  shield: number;
   private readonly sprite: Phaser.GameObjects.Sprite;
   private readonly shadow: Phaser.GameObjects.Ellipse;
   private facing: Facing = 'down';
@@ -71,10 +74,12 @@ export class Player extends Phaser.Events.EventEmitter {
     readonly cat: CatId,
     readonly stats: Stats,
     hp: number,
+    shield: number,
     facing: Facing = 'down',
   ) {
     super();
     this.hp = hp;
+    this.shield = shield;
     this.facing = facing;
     const feetY = 96 * ORIGIN_Y;
     const toFeet = ([mx, my]: [number, number]): [number, number] => [
@@ -100,7 +105,7 @@ export class Player extends Phaser.Events.EventEmitter {
   }
 
   get dead() {
-    return this.hp <= 0;
+    return this.hp + this.shield <= 0;
   }
 
   get feet() {
@@ -169,8 +174,11 @@ export class Player extends Phaser.Events.EventEmitter {
   /** Tira vida e empurra o gato para longe de (fromX, fromY). */
   takeDamage(amount: number, fromX: number, fromY: number) {
     if (this.dead || this.invulnerable > 0) return;
-    this.hp = Math.max(0, this.hp - amount);
-    this.emit('hp', this.hp, this.stats.maxHp);
+    // O escudo azul absorve o dano primeiro
+    const fromShield = Math.min(this.shield, amount);
+    this.shield -= fromShield;
+    this.hp = Math.max(0, this.hp - (amount - fromShield));
+    this.emitHp();
 
     const push = new Phaser.Math.Vector2(this.feet.x - fromX, this.feet.y - fromY);
     if (push.lengthSq() === 0) push.set(0, 1);
@@ -188,12 +196,35 @@ export class Player extends Phaser.Events.EventEmitter {
     }
   }
 
+  get maxPoints() {
+    return this.stats.maxHp * HP_PER_HEART;
+  }
+
+  /** Recupera vida vermelha (sem passar do máximo). Retorna quanto curou. */
+  heal(points: number) {
+    const healed = Math.min(points, this.maxPoints - this.hp);
+    if (healed <= 0) return 0;
+    this.hp += healed;
+    this.emitHp();
+    return healed;
+  }
+
+  /** Ganha escudo azul. */
+  addShield(points: number) {
+    this.shield += points;
+    this.emitHp();
+  }
+
+  private emitHp() {
+    this.emit('hp', this.hp, this.stats.maxHp, this.shield);
+  }
+
   /** Pega um item: aplica nos status e faz o gato comemorar. */
   collect(item: ItemInfo) {
     applyItem(this.stats, item);
     if (item.stat === 'maxHp') {
-      this.hp += 1; // a lata também cura o coração novo
-      this.emit('hp', this.hp, this.stats.maxHp);
+      this.hp += HP_PER_HEART; // a lata também enche o coração novo
+      this.emitHp();
     }
     this.emit('stats', this.stats);
     this.scene.tweens.add({

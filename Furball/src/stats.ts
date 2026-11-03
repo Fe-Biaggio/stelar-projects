@@ -2,6 +2,8 @@
 
 export const STAT_STEP = 0.2;
 export const BASE_MAX_HP = 3;
+/** Cada coração vale 2 pontos de vida; o dano padrão (1) tira meio coração. */
+export const HP_PER_HEART = 2;
 
 export type MultStat = 'damage' | 'speed' | 'fireRate' | 'shotSpeed' | 'size' | 'luck';
 

@@ -2,14 +2,18 @@ import Phaser from 'phaser';
 import { FLOOR, GAME_HEIGHT, GAME_WIDTH, TILE, WALL } from '../config';
 import { CatId } from '../cats';
 import { ITEMS, ItemId, randomItemOf } from '../items';
+import { Bomb } from '../objects/Bomb';
 import { Chest } from '../objects/Chest';
 import { DummyCat } from '../objects/DummyCat';
 import { Furball, createFurballTexture } from '../objects/Furball';
 import { ItemPickup, ItemSpawn } from '../objects/ItemPickup';
+import { Pickup } from '../objects/Pickup';
 import { Facing, Player } from '../objects/Player';
+import { HEART_POINTS, PICKUP_FRAME, PickupKind, addPickup, isHeart } from '../pickups';
 import { RARITY_INFO, RARITY_ORDER, rarityOdds, rollRarity } from '../rarity';
 import { RoomId, RoomState, Run, newRun } from '../run';
 import { STAT_LABELS, Stats, formatMult } from '../stats';
+import { drawScorch, playExplosion } from '../world/explosion';
 import { DoorSide, drawRoom } from '../world/room';
 
 type MoveKeys = Record<'w' | 'a' | 's' | 'd', Phaser.Input.Keyboard.Key>;
@@ -31,6 +35,30 @@ const TEST_ITEMS: [ItemId, number, number][] = [
   ['fish', 4, 5],
   ['milk', 8, 5],
 ];
+
+// Moedas, bombas e chaves de teste na sala inicial (tipo, coluna, linha em tiles do chão).
+const TEST_PICKUPS: [PickupKind, number, number][] = [
+  ['coin', 1, 2],
+  ['coin', 1, 4],
+  ['bomb', 11, 2],
+  ['key', 11, 4],
+  ['goldenKey', 0, 6],
+  ['heart', 11, 6],
+  ['halfHeart', 12, 6],
+  ['blueHeart', 12, 5],
+];
+
+// Bomba: até onde causa dano e até onde empurra as coisas.
+const BLAST_RADIUS = 110;
+const KNOCK_RADIUS = 220;
+const KNOCK_MAX = 260; // distância que algo colado na bomba é lançado
+const BOMB_DAMAGE_PLAYER = 2; // 1 coração
+const BOMB_DAMAGE_ENEMY = 10;
+
+// Corações no HUD: quantos por linha e o espaçamento.
+const HEARTS_PER_ROW = 8;
+const HEART_GAP = 34;
+const HEART_ROW_H = 30;
 
 /** Portas abertas de cada sala e para onde levam. */
 const DOORS: Record<RoomId, Partial<Record<DoorSide, RoomId>>> = {
@@ -71,6 +99,12 @@ export class RoomScene extends Phaser.Scene {
   private spikeRects: Phaser.Geom.Rectangle[] = [];
   private hearts: Phaser.GameObjects.Image[] = [];
   private items: ItemPickup[] = [];
+  private pickups: Pickup[] = [];
+  private bombs: Bomb[] = [];
+  private counters = new Map<PickupKind, Phaser.GameObjects.Text>();
+  private counterIcons = new Map<PickupKind, Phaser.GameObjects.Image>();
+  private heartRows = 1;
+  private goldenKeyIcon?: Phaser.GameObjects.Image;
   private statTexts = new Map<string, Phaser.GameObjects.Text>();
   private banner?: Phaser.GameObjects.Container;
   private hint?: Phaser.GameObjects.Text;
@@ -86,7 +120,7 @@ export class RoomScene extends Phaser.Scene {
   }
 
   private get roomState(): RoomState {
-    return (this.run.rooms[this.roomId] ??= { items: [] });
+    return (this.run.rooms[this.roomId] ??= { items: [], pickups: [] });
   }
 
   /** Sem `run`, começa uma partida nova (vinda da seleção ou do R). */
@@ -101,15 +135,18 @@ export class RoomScene extends Phaser.Scene {
     this.furballs = [];
     this.spikeRects = [];
     this.items = [];
+    this.pickups = [];
     this.hearts = [];
     this.banner = undefined;
     this.dummy = undefined;
     this.chest = undefined;
+    this.bombs = [];
     createFurballTexture(this, this.cat);
     drawRoom(this, Object.keys(DOORS[this.roomId]) as DoorSide[]);
     this.physics.world.setBounds(FLOOR.x, FLOOR.y, FLOOR.width, FLOOR.height);
 
     const firstVisit = !this.run.rooms[this.roomId];
+    for (const sc of this.roomState.scorches ?? []) drawScorch(this, sc.x, sc.y, sc.seed);
     if (this.roomId === 'start') {
       this.drawSpikes();
       // Gato de teste parado no meio da sala.
@@ -119,13 +156,14 @@ export class RoomScene extends Phaser.Scene {
     }
     // Itens que ficaram no chão da última vez que o gato esteve aqui
     for (const it of this.roomState.items) this.items.push(new ItemPickup(this, it.x, it.y, it.id));
+    for (const p of this.roomState.pickups) this.pickups.push(new Pickup(this, p.x, p.y, p.kind, false, p.tag));
     if (firstVisit && this.roomId === 'start') this.respawnItems(false);
 
     const spawn = this.spawnPoint();
-    this.player = new Player(this, spawn.x, spawn.y, this.cat, this.run.stats, this.run.hp, spawn.facing);
+    this.player = new Player(this, spawn.x, spawn.y, this.cat, this.run.stats, this.run.hp, this.run.shield, spawn.facing);
     if (this.dummy) this.physics.add.collider(this.player.body, this.dummy.body);
     if (this.chest) this.physics.add.collider(this.player.body, this.chest.body, () => this.openChest());
-    this.player.on('hp', (hp: number, maxHp: number) => this.updateHearts(hp, maxHp, true));
+    this.player.on('hp', () => this.updateHearts(true));
     this.player.on('stats', (stats: Stats) => this.updateStats(stats));
     this.player.on('dead', () => this.showGameOver());
 
@@ -135,12 +173,13 @@ export class RoomScene extends Phaser.Scene {
     this.aimKeys = kb.addKeys({ up: K.UP, down: K.DOWN, left: K.LEFT, right: K.RIGHT }) as AimKeys;
     kb.addCapture([K.UP, K.DOWN, K.LEFT, K.RIGHT]); // não rolar a página com as setas
     kb.on('keydown-ESC', () => this.backToSelect());
+    kb.on('keydown-E', () => this.placeBomb());
 
     this.createHud();
 
     if (!this.enterFrom) {
       this.hint = this.add
-        .text(GAME_WIDTH / 2, GAME_HEIGHT - WALL - 28, 'WASD para andar  ·  setas para atirar', {
+        .text(GAME_WIDTH / 2, GAME_HEIGHT - WALL - 28, 'WASD andar  ·  setas atirar  ·  E bomba', {
           fontFamily: 'monospace',
           fontSize: '18px',
           color: '#e8d9c4',
@@ -212,6 +251,8 @@ export class RoomScene extends Phaser.Scene {
 
     this.checkSpikes();
     this.checkItems(time);
+    this.checkPickups(time);
+    this.updateBombs(dt, time);
     this.checkDoors();
   }
 
@@ -249,7 +290,9 @@ export class RoomScene extends Phaser.Scene {
   /** Guarda na partida o que precisa continuar igual quando o gato voltar. */
   private saveRoom() {
     this.run.hp = this.player.hp;
+    this.run.shield = this.player.shield;
     this.roomState.items = this.items.filter((i) => !i.collected).map((i) => ({ id: i.info.id, x: i.x, y: i.y }));
+    this.roomState.pickups = this.pickups.filter((p) => !p.collected).map((p) => ({ kind: p.kind, x: p.x, y: p.y, tag: p.tag }));
     if (this.chest) this.roomState.chestOpen = this.chest.opened;
   }
 
@@ -288,6 +331,112 @@ export class RoomScene extends Phaser.Scene {
       const y = FLOOR.y + (row + 0.5) * TILE + 14;
       this.items.push(new ItemPickup(this, x, y, id, spawn));
     }
+    TEST_PICKUPS.forEach(([kind, col, row], i) => {
+      const tag = `test-${i}`;
+      const x = FLOOR.x + (col + 0.5) * TILE;
+      const y = FLOOR.y + (row + 0.5) * TILE + 14;
+      if (this.pickups.some((p) => !p.collected && p.tag === tag)) return;
+      this.pickups.push(new Pickup(this, x, y, kind, animate, tag));
+    });
+  }
+
+  // ---------- Bombas ----------
+
+  /** Coloca uma bomba nos pés do gato, se houver bombas no inventário. */
+  private placeBomb() {
+    if (this.leaving || this.player.dead || this.run.inventory.bombs <= 0) return;
+    this.run.inventory.bombs -= 1;
+    this.updateCounters('bomb');
+    const feet = this.player.feet;
+    const bomb = new Bomb(this, feet.x, feet.y + 2, (b) => this.explode(b));
+    // O gato empurra a bomba, mas só depois de sair de cima dela.
+    bomb.colliders.push(this.physics.add.collider(this.player.body, bomb.body, undefined, () => bomb.solid));
+    if (this.dummy) bomb.colliders.push(this.physics.add.collider(bomb.body, this.dummy.body));
+    if (this.chest) bomb.colliders.push(this.physics.add.collider(bomb.body, this.chest.body));
+    for (const other of this.bombs) {
+      const c = this.physics.add.collider(bomb.body, other.body);
+      bomb.colliders.push(c);
+      other.colliders.push(c);
+    }
+    this.bombs.push(bomb);
+  }
+
+  private updateBombs(dt: number, time: number) {
+    for (const bomb of this.bombs) {
+      if (!bomb.solid && !this.physics.overlap(this.player.body, bomb.body)) bomb.solid = true;
+      bomb.update(dt, time);
+    }
+    this.bombs = this.bombs.filter((b) => !b.exploded);
+  }
+
+  /** Explosão: dano por perto, marca no chão e tudo ao redor lançado para longe. */
+  private explode(bomb: Bomb) {
+    const { x, y } = bomb;
+    playExplosion(this, x, y);
+    const seed = `${Date.now()}-${Math.random()}`;
+    drawScorch(this, x, y, seed);
+    (this.roomState.scorches ??= []).push({ x, y, seed });
+
+    // Quanto mais perto, mais forte o empurrão (na direção oposta à bomba).
+    const pushFrom = (px: number, py: number): { dx: number; dy: number } | null => {
+      const d = Phaser.Math.Distance.Between(x, y, px, py);
+      if (d > KNOCK_RADIUS) return null;
+      const a = d < 1 ? Math.random() * Math.PI * 2 : Math.atan2(py - y, px - x);
+      const strength = (1 - d / KNOCK_RADIUS) * KNOCK_MAX;
+      return { dx: Math.cos(a) * strength, dy: Math.sin(a) * strength };
+    };
+
+    for (const item of this.items) {
+      const push = pushFrom(item.x, item.y);
+      if (push) item.knock(push.dx, push.dy);
+    }
+    for (const p of this.pickups) {
+      const push = pushFrom(p.x, p.y);
+      if (push) p.knock(push.dx, push.dy);
+    }
+    // Outras bombas por perto são lançadas e explodem em seguida
+    for (const other of this.bombs) {
+      if (other === bomb || other.exploded) continue;
+      const push = pushFrom(other.x, other.y);
+      if (!push) continue;
+      other.body.velocity.set(push.dx * 2.2, push.dy * 2.2);
+      if (Phaser.Math.Distance.Between(x, y, other.x, other.y) < BLAST_RADIUS) other.shortenFuse();
+    }
+
+    const feet = this.player.feet;
+    if (Phaser.Math.Distance.Between(x, y, feet.x, feet.y) < BLAST_RADIUS) {
+      this.player.takeDamage(BOMB_DAMAGE_PLAYER, x, y);
+    }
+    if (this.dummy?.alive && Phaser.Math.Distance.Between(x, y, this.dummy.x, this.dummy.y) < BLAST_RADIUS + 20) {
+      const a = Math.atan2(this.dummy.y - y, this.dummy.x - x);
+      this.dummy.takeHit(Math.cos(a), Math.sin(a), BOMB_DAMAGE_ENEMY);
+      if (this.showDamage) this.showDamageNumber(this.dummy.x, this.dummy.y - 70, BOMB_DAMAGE_ENEMY);
+    }
+    // Explosões também abrem o baú, como no Isaac
+    if (this.chest && !this.chest.opened && Phaser.Math.Distance.Between(x, y, this.chest.x, this.chest.y) < BLAST_RADIUS + 20) {
+      this.openChest();
+    }
+  }
+
+  private checkPickups(time: number) {
+    const feet = this.player.feet;
+    for (const p of this.pickups) {
+      p.update(time);
+      if (this.player.dead || !p.touches(feet.x, feet.y)) continue;
+      // Coração vermelho com a vida cheia fica no chão, como no Isaac.
+      if ((p.kind === 'heart' || p.kind === 'halfHeart') && this.player.hp >= this.player.maxPoints) continue;
+      const target = this.counterPosition(p.kind);
+      p.collect(target.x, target.y, () => {
+        if (p.kind === 'blueHeart') this.player.addShield(HEART_POINTS.blueHeart!);
+        else if (isHeart(p.kind)) this.player.heal(HEART_POINTS[p.kind]!);
+        else {
+          addPickup(this.run.inventory, p.kind);
+          this.updateCounters(p.kind);
+        }
+      });
+      if (p.kind === 'goldenKey') this.showBanner('Chave dourada', 'Abre todas as portas do mapa', '#f2c879');
+    }
+    this.pickups = this.pickups.filter((p) => !p.collected);
   }
 
   private checkItems(time: number) {
@@ -333,9 +482,97 @@ export class RoomScene extends Phaser.Scene {
   // ---------- HUD ----------
 
   private createHud() {
-    this.updateHearts(this.player.hp, this.player.stats.maxHp, false);
+    this.createCounters();
+    this.updateHearts(false);
     this.createTopButtons();
     this.createStatsPanel();
+  }
+
+  /** Contadores de moedas, bombas e chaves embaixo dos corações (como no Isaac). */
+  private createCounters() {
+    this.counters.clear();
+    this.counterIcons.clear();
+    for (const kind of ['coin', 'bomb', 'key'] as PickupKind[]) {
+      const { x, y } = this.counterPosition(kind);
+      this.counterIcons.set(kind, this.add.image(x, y, 'pickups', PICKUP_FRAME[kind]).setScale(0.5).setDepth(20_000));
+      this.counters.set(
+        kind,
+        this.add
+          .text(x + 16, y, '', { fontFamily: 'monospace', fontSize: '16px', color: '#e8d9c4', stroke: '#1a1210', strokeThickness: 4 })
+          .setOrigin(0, 0.5)
+          .setDepth(20_000),
+      );
+    }
+    const keyPos = this.counterPosition('goldenKey');
+    this.goldenKeyIcon = this.add
+      .image(keyPos.x, keyPos.y, 'pickups', PICKUP_FRAME.goldenKey)
+      .setScale(0.5)
+      .setDepth(20_000);
+    this.updateCounters();
+  }
+
+  /**
+   * Para onde cada coletável voa no HUD. Moedas, bombas e chaves vão para o contador
+   * (a chave dourada fica ao lado das chaves); corações vão para o espaço que vão ocupar.
+   */
+  private counterPosition(kind: PickupKind): { x: number; y: number } {
+    const x = 38;
+    const top = 70 + (this.heartRows - 1) * HEART_ROW_H; // desce se houver mais linhas de corações
+    const gap = 24;
+    switch (kind) {
+      case 'coin':
+        return { x, y: top };
+      case 'bomb':
+        return { x, y: top + gap };
+      case 'key':
+        return { x, y: top + gap * 2 };
+      case 'goldenKey':
+        return { x: x + 52, y: top + gap * 2 };
+      case 'blueHeart':
+        return this.heartSlot(this.player.stats.maxHp + Math.floor(this.player.shield / 2), true);
+      default:
+        return this.heartSlot(Math.min(Math.floor(this.player.hp / 2), this.player.stats.maxHp - 1), true);
+    }
+  }
+
+  /** Posição do coração número `i` no HUD (canto superior esquerdo, ou centro com `center`). */
+  private heartSlot(i: number, center = false) {
+    const x = 26 + (i % HEARTS_PER_ROW) * HEART_GAP;
+    const y = 22 + Math.floor(i / HEARTS_PER_ROW) * HEART_ROW_H;
+    return center ? { x: x + 16, y: y + 15 } : { x, y };
+  }
+
+  /** Reposiciona os contadores quando os corações ganham ou perdem uma linha. */
+  private layoutCounters() {
+    for (const kind of ['coin', 'bomb', 'key'] as PickupKind[]) {
+      const { x, y } = this.counterPosition(kind);
+      this.counterIcons.get(kind)?.setPosition(x, y);
+      this.counters.get(kind)?.setPosition(x + 16, y);
+    }
+    const g = this.counterPosition('goldenKey');
+    this.goldenKeyIcon?.setPosition(g.x, g.y);
+  }
+
+  private updateCounters(bump?: PickupKind) {
+    const inv = this.run.inventory;
+    const values: [PickupKind, number][] = [
+      ['coin', inv.coins],
+      ['bomb', inv.bombs],
+      ['key', inv.keys],
+    ];
+    for (const [kind, value] of values) {
+      const text = this.counters.get(kind)!;
+      text.setText(String(value).padStart(2, '0'));
+      if (bump === kind) {
+        text.setScale(1.4);
+        this.tweens.add({ targets: text, scale: 1, duration: 200, ease: 'Back.Out' });
+      }
+    }
+    this.goldenKeyIcon?.setVisible(inv.goldenKey);
+    if (bump === 'goldenKey' && this.goldenKeyIcon) {
+      this.goldenKeyIcon.setScale(1.1);
+      this.tweens.add({ targets: this.goldenKeyIcon, scale: 0.5, duration: 300, ease: 'Back.Out' });
+    }
   }
 
   /** Painel pequeno com os status, abaixo do botão Início (para testes durante o desenvolvimento). */
@@ -506,28 +743,57 @@ export class RoomScene extends Phaser.Scene {
     );
   }
 
-  private updateHearts(hp: number, maxHp: number, animate: boolean) {
-    // Cria corações novos quando a vida máxima aumenta
-    while (this.hearts.length < maxHp) {
-      const heart = this.add
-        .image(26 + this.hearts.length * 34, 22, 'hearts', 1)
-        .setOrigin(0, 0)
-        .setDepth(20_000);
-      if (animate) {
-        heart.setScale(0);
-        this.tweens.add({ targets: heart, scale: 1, duration: 300, ease: 'Back.Out' });
-      }
-      this.hearts.push(heart);
+  /**
+   * Desenha os corações: primeiro os vermelhos (cheio, metade ou vazio, 2 pontos cada),
+   * depois os azuis do escudo (cheio ou metade). Até 8 por linha.
+   */
+  private updateHearts(animate: boolean) {
+    const { hp, shield } = this.player;
+    const maxHp = this.player.stats.maxHp;
+    const frames: number[] = [];
+    for (let i = 0; i < maxHp; i++) {
+      const pts = Phaser.Math.Clamp(hp - i * 2, 0, 2);
+      frames.push(pts === 2 ? 0 : pts === 1 ? 2 : 1);
     }
-    this.hearts.forEach((heart, i) => {
-      const wasFull = heart.frame.name === '0';
-      const full = i < hp;
-      heart.setFrame(full ? 0 : 1);
-      if (animate && wasFull && !full) {
-        heart.setScale(1.5);
+    for (let i = 0; i < Math.ceil(shield / 2); i++) {
+      frames.push(shield - i * 2 >= 2 ? 3 : 4);
+    }
+
+    // Some com os corações que deixaram de existir (escudo perdido)
+    while (this.hearts.length > frames.length) {
+      const heart = this.hearts.pop()!;
+      if (animate) {
+        this.tweens.add({ targets: heart, scale: 0, alpha: 0, duration: 250, onComplete: () => heart.destroy() });
+      } else heart.destroy();
+    }
+    frames.forEach((frame, i) => {
+      let heart = this.hearts[i];
+      if (!heart) {
+        const pos = this.heartSlot(i);
+        heart = this.add.image(pos.x + 16, pos.y + 15, 'hearts', frame).setDepth(20_000);
+        if (animate) {
+          heart.setScale(0);
+          this.tweens.add({ targets: heart, scale: 1, duration: 300, ease: 'Back.Out' });
+        }
+        this.hearts.push(heart);
+        return;
+      }
+      const before = Number(heart.frame.name);
+      if (before === frame) return;
+      heart.setFrame(frame);
+      if (animate) {
+        // Pulsa mais forte quando perde vida, mais leve quando ganha
+        const lost = frame === 1 || (before === 0 && frame === 2) || (before === 3 && frame === 4);
+        heart.setScale(lost ? 1.5 : 1.25);
         this.tweens.add({ targets: heart, scale: 1, duration: 250, ease: 'Back.Out' });
       }
     });
+
+    const rows = Math.max(1, Math.ceil(frames.length / HEARTS_PER_ROW));
+    if (rows !== this.heartRows) {
+      this.heartRows = rows;
+      this.layoutCounters();
+    }
   }
 
   private showGameOver() {

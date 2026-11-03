@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { ITEMS, ItemId, ItemInfo } from '../items';
 import { RARITY_INFO } from '../rarity';
+import { knockAlong } from '../world/knock';
 
 const ITEM_SCALE = 0.72;
 const PICKUP_RADIUS = 30; // distância dos pés do gato até o item
@@ -24,8 +25,8 @@ export class ItemPickup {
 
   constructor(
     private readonly scene: Phaser.Scene,
-    readonly x: number,
-    readonly y: number,
+    public x: number,
+    public y: number,
     id: ItemId,
     spawn: ItemSpawn = { kind: 'none' },
   ) {
@@ -95,6 +96,32 @@ export class ItemPickup {
     const bob = (Math.sin(time / 300 + this.phase) + 1) / 2; // 0..1
     this.sprite.y = this.y - 6 - bob * 6;
     this.shadow.setScale(1 - bob * 0.2);
+  }
+
+  /** Lançado pela explosão: desliza (dx, dy) pelo chão com um pulo. */
+  knock(dx: number, dy: number) {
+    if (this.collected) return;
+    this.landed = false;
+    this.scene.tweens.killTweensOf(this.sprite);
+    knockAlong(
+      this.scene,
+      this.x,
+      this.y,
+      dx,
+      dy,
+      (x, y, lift) => {
+        if (this.collected) return;
+        this.sprite.setPosition(x, y - 6 - lift).setDepth(y);
+        this.shadow.setPosition(x, y).setDepth(y - 1).setScale(1 - lift / 120);
+        this.glow?.setPosition(x, y - 2);
+      },
+      (x, y) => {
+        if (this.collected) return;
+        this.x = x;
+        this.y = y;
+        this.landed = true;
+      },
+    );
   }
 
   touches(px: number, py: number) {

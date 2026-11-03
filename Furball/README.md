@@ -19,11 +19,12 @@ npm run dev
 Abra o endereço que aparecer (normalmente http://localhost:5173).
 O jogo abre na seleção de personagem: Preto (principal), Laranja, Siamês, Tricolor ou Frajola.
 
-Controles: **WASD** para andar, **setas** para cuspir bolas de pelo. O botão **Início**
+Controles: **WASD** para andar, **setas** para cuspir bolas de pelo, **E** para colocar bomba. O botão **Início**
 (canto superior direito) ou **Esc** volta à seleção a qualquer momento. Depois de perder,
 **R** recomeça com o mesmo gato. Adicione `?debug` na URL para ver as colisões.
 
-O gato começa com 3 corações; os espinhos no chão tiram vida. No meio da sala há um gato
+O gato começa com 3 corações. Cada coração vale 2 pontos de vida e o dano padrão é 1, então
+cada acerto (ou espinho) tira meio coração. No meio da sala há um gato
 cinza de teste: ele morre com 4 bolas de pelo e reaparece depois de alguns segundos.
 
 ### Itens
@@ -33,7 +34,7 @@ superior direito mostra os valores atuais.
 
 | Item | Efeito | Raridade |
 |---|---|---|
-| Comida enlatada | +1 coração (e cura esse coração) | Raro |
+| Comida enlatada | +1 coração (já vem cheio) | Raro |
 | Catnip | Velocidade de movimento | Comum |
 | Escovinha | Cadência (tiros por segundo) | Incomum |
 | Churu | Sorte | Comum |
@@ -43,9 +44,37 @@ superior direito mostra os valores atuais.
 
 Na sala de teste há um de cada no chão; R ou Esc recomeçam com os status zerados.
 
+### Moedas, bombas e chaves
+
+Coletáveis de inventário, contados embaixo dos corações (até 99 cada):
+
+- **Moeda**, **bomba** e **chave prateada** – cada uma soma 1 no contador.
+- **Chave dourada** – aparece ao lado das chaves; vai abrir todas as portas do mapa quando
+  houver portas trancadas.
+
+Na sala inicial há duas moedas, uma bomba, uma chave e uma chave dourada para teste.
+Chaves ainda só são coletadas; usá-las vem depois.
+
+### Corações
+
+- **Coração** (2 pontos) e **meio coração** (1 ponto) no chão recuperam vida. Com a vida
+  cheia, eles ficam no chão.
+- **Coração azul escuro** funciona como escudo: aparece depois dos vermelhos, é perdido
+  antes deles e não se recupera.
+
+### Bombas
+
+- **E** coloca uma bomba (se houver no contador). Ela pisca cada vez mais rápido e explode
+  em 2,5 segundos.
+- O gato empurra a bomba andando contra ela; ela quica nas paredes.
+- A explosão tira 1 coração do gato se ele estiver perto, dá 10 de dano no inimigo, abre o
+  baú, faz outras bombas próximas explodirem e deixa uma marca de queimado no chão.
+- Itens, moedas e corações por perto são lançados para longe: quanto mais perto da bomba,
+  mais longe vão.
+
 Botões de teste no topo da sala:
 - **Dano: ligado/desligado** – mostra o dano de cada bola de pelo sobre o inimigo.
-- **+ Repor itens** – devolve ao chão os itens já pegos, para testar o acúmulo.
+- **+ Repor itens** – devolve ao chão os itens e coletáveis já pegos, para testar o acúmulo.
 
 ### Sala do tesouro e sorte
 
@@ -81,17 +110,18 @@ Furball/
 │   ├── main.ts          # inicia o Phaser
 │   ├── cats.ts          # lista de gatos jogáveis e posição da boca de cada um
 │   ├── items.ts         # itens coletáveis, efeitos e raridade
+│   ├── pickups.ts       # moedas, bombas, chaves e corações do chão
 │   ├── rarity.ts        # raridades e chances do baú conforme a sorte
 │   ├── run.ts           # estado da partida (status, vida, o que ficou em cada sala)
 │   ├── stats.ts         # status do gato (multiplicadores)
 │   ├── objects/         # jogador, inimigos, projéteis...
 │   ├── scenes/          # carregamento, seleção de personagem, sala
-│   └── world/           # desenho da sala
+│   └── world/           # desenho da sala, explosão e empurrão
 └── tools/               # scripts para recortar sprites das folhas
 ```
 
 Para regerar os sprites a partir das folhas: `python tools/extract_cats.py`,
-`python tools/extract_ui.py` e `python tools/extract_items.py`.
+`python tools/extract_ui.py`, `python tools/extract_items.py` e `python tools/extract_pickups.py`.
 
 ## Núcleo do jogo (MVP)
 
