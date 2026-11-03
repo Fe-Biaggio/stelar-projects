@@ -63,6 +63,11 @@ export class Player extends Phaser.Events.EventEmitter {
   private fireCooldown = 0;
   private mouthTimer = 0;
   private invulnerable = 0;
+  /** Altura em que o gato está (subido na cadeira ou na mesa), em pixels. */
+  private liftTarget = 0;
+  private lift = 0;
+  /** Profundidade mínima de desenho (para aparecer na frente do móvel em que subiu). */
+  private minDepth = 0;
   /** Boca em relação aos pés, já na escala do sprite: [x, altura]. */
   private readonly mouth: Record<Facing, [number, number]>;
 
@@ -108,6 +113,17 @@ export class Player extends Phaser.Events.EventEmitter {
     return this.hp + this.shield <= 0;
   }
 
+  /** Sobe (ou desce) do móvel: `height` em pixels; `minDepth` para desenhar na frente dele. */
+  setElevation(height: number, minDepth: number) {
+    this.liftTarget = height;
+    this.minDepth = minDepth;
+  }
+
+  /** Altura atual do gato acima do chão (para o tiro sair da boca na altura certa). */
+  get elevation() {
+    return this.lift;
+  }
+
   get feet() {
     return { x: this.body.center.x, y: this.body.bottom - 2 };
   }
@@ -151,7 +167,7 @@ export class Player extends Phaser.Events.EventEmitter {
       shot = {
         x: this.feet.x + mx,
         y: this.feet.y + groundOffset,
-        height: mh + groundOffset,
+        height: mh + groundOffset + this.lift,
         dir: dir.clone(),
         inherited: v.clone(),
         stats: this.stats,
@@ -184,6 +200,7 @@ export class Player extends Phaser.Events.EventEmitter {
 
     const push = new Phaser.Math.Vector2(this.feet.x - fromX, this.feet.y - fromY);
     if (push.lengthSq() === 0) push.set(0, 1);
+    // O empurrão vale também em cima da mesa: um inimigo que voa pode derrubar o gato dela
     push.normalize().scale(KNOCKBACK);
     this.body.velocity.set(push.x, push.y);
 
@@ -264,10 +281,14 @@ export class Player extends Phaser.Events.EventEmitter {
 
   private animate(dt: number, time: number) {
     // Posiciona sprite e sombra sobre os pés.
-    const { x: feetX, y: feetY } = this.feet;
+    const { x: feetX, y: groundY } = this.feet;
+    // Sobe/desce do móvel suavemente
+    this.lift += (this.liftTarget - this.lift) * (1 - Math.exp(-18 * dt));
+    const feetY = groundY - this.lift;
+    const depth = Math.max(groundY, this.minDepth);
     this.shadow.setPosition(feetX, feetY - 4);
-    this.sprite.setDepth(feetY);
-    this.shadow.setDepth(feetY - 1);
+    this.sprite.setDepth(depth);
+    this.shadow.setDepth(depth - 1);
 
     // Só há um quadro por direção, então o andar é animado com pulinhos e balanço.
     const speedRatio = Math.min(this.body.velocity.length() / (SPEED * this.stats.speed), 1);

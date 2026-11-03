@@ -187,3 +187,25 @@ export function drawTrapdoor(scene: Phaser.Scene, x: number, y: number) {
   g.fillStyle(0x2a1a10).fillRect(x - 26, y - 6, 52, 5).fillRect(x - 22, y + 4, 44, 4);
   return g;
 }
+
+/** Rachaduras numa porta trancada atingida por uma bomba. */
+export function drawDoorCracks(scene: Phaser.Scene, side: DoorSide) {
+  const g = scene.add.graphics().setDepth(-88);
+  const pts = doorPoints(side);
+  const lines = [
+    [[-30, -8], [-14, 4], [-20, 16], [-6, 30]],
+    [[28, -6], [14, 6], [22, 20], [10, 30]],
+    [[-4, -14], [2, -2], [-6, 10]],
+  ];
+  for (const line of lines) {
+    const p = pts(line);
+    g.lineStyle(4, 0x0a0604);
+    g.strokePoints(p, false);
+    g.lineStyle(1.5, 0x8a6a4a);
+    g.strokePoints(p.map((v) => new Phaser.Math.Vector2(v.x - 1, v.y - 1)), false);
+  }
+  // Cadeado torto e amassado
+  const [c] = pts([[0, 8]]);
+  g.fillStyle(0x000000, 0.35).fillCircle(c.x + 6, c.y + 4, 9);
+  return g;
+}

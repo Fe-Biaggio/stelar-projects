@@ -2,7 +2,10 @@ import { DoorSide } from './room';
 
 // Mapa de um nível: salas numa grade, ligadas pelas portas dos lados (como no Isaac).
 
-export type RoomType = 'devStart' | 'start' | 'normal' | 'treasure' | 'shop' | 'boss';
+export type RoomType = 'devStart' | 'devProps' | 'start' | 'normal' | 'treasure' | 'shop' | 'boss';
+
+/** Baú numa sala comum: "wood" abre sem chave; "gold" precisa de chave. */
+export type ChestKind = 'wood' | 'gold';
 
 export interface RoomDef {
   id: string;
@@ -11,6 +14,8 @@ export interface RoomDef {
   type: RoomType;
   /** As portas que levam a esta sala começam trancadas (precisam de chave). */
   locked?: boolean;
+  /** Sala comum com baú no meio. */
+  chest?: ChestKind;
 }
 
 export interface FloorMap {
@@ -47,6 +52,8 @@ export function devFloor(): FloorMap {
   add(0, 0, 'devStart');
   add(1, 0, 'treasure');
   add(0, -1, 'shop', true);
+  add(-1, 0, 'devProps');
+  rooms[roomKey(-1, 0)].chest = 'wood';
   return { rooms, startId: roomKey(0, 0) };
 }
 
@@ -105,6 +112,13 @@ export function generateFloor(level: number, rng: () => number = Math.random): F
     const shop = pick();
     rooms[shop].type = 'shop';
     rooms[shop].locked = true;
+    // Salas comuns com baú: pelo menos 2 (3 a partir do nível 3); a primeira é sempre de madeira
+    const normals = Object.values(rooms).filter((r) => r.type === 'normal');
+    const chests = Math.min(normals.length, level >= 3 ? 3 : 2);
+    for (let i = 0; i < chests; i++) {
+      const room = normals.splice(Math.floor(rng() * normals.length), 1)[0];
+      room.chest = i === 0 || rng() < 0.5 ? 'wood' : 'gold';
+    }
     return { rooms, startId: roomKey(0, 0) };
   }
   // Muito improvável; volta para um mapa simples em linha

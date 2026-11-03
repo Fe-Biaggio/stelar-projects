@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { FLOOR, GAME_HEIGHT, GAME_WIDTH, TILE, WALL } from '../config';
+import { FLOOR, GAME_HEIGHT, GAME_WIDTH, ROOM_COLS, ROOM_ROWS, TILE, WALL } from '../config';
 import { CatId, PLAYABLE } from '../cats';
 import { ITEMS, ItemId, randomItemOf } from '../items';
 import { Bomb } from '../objects/Bomb';
@@ -19,7 +19,18 @@ import { TouchControls, isTouchDevice } from '../ui/TouchControls';
 import { drawScorch, playExplosion } from '../world/explosion';
 import { priceOf, rollShopItems } from '../shop';
 import { RoomDef, doorKey, neighbors } from '../world/floor';
-import { DoorSide, drawDoorBars, drawLockedDoor, drawRoom, drawTrapdoor } from '../world/room';
+import { DOOR_POS, DoorSide, drawDoorBars, drawDoorCracks, drawLockedDoor, drawRoom, drawTrapdoor } from '../world/room';
+import {
+  Prop,
+  blocksWalk,
+  breakable,
+  devPropsLayout,
+  generateProps,
+  occupancy,
+  propRect,
+  tileAt,
+  tileCenter,
+} from '../world/props';
 
 type MoveKeys = Record<'w' | 'a' | 's' | 'd', Phaser.Input.Keyboard.Key>;
 type AimKeys = Record<Facing, Phaser.Input.Keyboard.Key>;
@@ -81,6 +92,36 @@ const CLEAR_DROPS: [PickupKind | 'none', number][] = [
   ['none', 14],
 ];
 
+// O que um inimigo solta ao morrer (um sorteio por inimigo; "item" = item sorteado pela sorte).
+const ENEMY_DROPS: [PickupKind | 'item' | 'none', number][] = [
+  ['coin', 50],
+  ['key', 5],
+  ['bomb', 5],
+  ['item', 5],
+  ['none', 35],
+];
+
+// O que o baú de madeira (sem chave) solta: 2 ou 3 coletáveis e, às vezes, um item.
+const WOOD_CHEST_DROPS: [PickupKind, number][] = [
+  ['coin', 45],
+  ['heart', 20],
+  ['bomb', 15],
+  ['key', 15],
+  ['blueHeart', 5],
+];
+const WOOD_CHEST_ITEM_CHANCE = 0.1;
+
+// Altura do gato em cima da cadeira e da mesa (pixels).
+const CHAIR_LIFT = 16;
+const TABLE_LIFT = 30;
+
+/** Elemento da sala já montado na cena. */
+interface PropObj {
+  prop: Prop;
+  body?: Phaser.Physics.Arcade.StaticBody;
+  sprite?: Phaser.GameObjects.Image;
+}
+
 // Tipos de inimigo das salas comuns (peso de cada um).
 const ENEMY_POOL: [EnemyKind, number][] = [
   ['fly', 3],
@@ -135,6 +176,11 @@ export class RoomScene extends Phaser.Scene {
   private bars = new Map<DoorSide, Phaser.GameObjects.Graphics>();
   private trapdoor?: { x: number; y: number };
   private bossName = 'Boss';
+  private propObjs: PropObj[] = [];
+  /** 0 = chão, 1 = em cima da cadeira, 2 = em cima da mesa. */
+  private playerHeight = 0;
+  /** Inimigos que já soltaram o que tinham ao morrer. */
+  private dropped = new Set<Enemy>();
   /** O jogo acabou com vitória: a sala para, mas os botões de recomeçar continuam. */
   private finished = false;
   private bossBar?: { fill: Phaser.GameObjects.Rectangle; boss: Enemy; parts: Phaser.GameObjects.GameObject[] };
@@ -153,6 +199,7 @@ export class RoomScene extends Phaser.Scene {
   private touch?: TouchControls;
   /** Desenhos das portas trancadas desta sala, por lado. */
   private locks = new Map<DoorSide, Phaser.GameObjects.Graphics>();
+  private cracks = new Map<DoorSide, Phaser.GameObjects.Graphics>();
   /** Evita repetir o aviso de "precisa de chave/moedas" a cada quadro. */
   private nagUntil = 0;
   /** Depois de destrancar, espera um pouco antes de deixar passar pela porta. */
@@ -221,6 +268,9 @@ export class RoomScene extends Phaser.Scene {
   create() {
     this.leaving = false;
     this.finished = false;
+    this.propObjs = [];
+    this.playerHeight = 0;
+    this.dropped.clear();
     this.furballs = [];
     this.spikeRects = [];
     this.items = [];
@@ -237,6 +287,7 @@ export class RoomScene extends Phaser.Scene {
     this.trapdoor = undefined;
     this.bossBar = undefined;
     this.locks.clear();
+    this.cracks.clear();
     this.nagUntil = 0;
     this.doorPauseUntil = 0;
     createFurballTexture(this, this.cat);
@@ -244,10 +295,13 @@ export class RoomScene extends Phaser.Scene {
     this.physics.world.setBounds(FLOOR.x, FLOOR.y, FLOOR.width, FLOOR.height);
 
     for (const side of Object.keys(this.doors) as DoorSide[]) {
-      if (this.isLocked(side)) this.locks.set(side, drawLockedDoor(this, side));
+      if (!this.isLocked(side)) continue;
+      this.locks.set(side, drawLockedDoor(this, side));
+      if (this.run.cracked.includes(doorKey(this.roomId, this.doors[side]!))) this.cracks.set(side, drawDoorCracks(this, side));
     }
 
     const firstVisit = !this.run.rooms[this.roomId];
+    this.buildProps(firstVisit);
     for (const sc of this.roomState.scorches ?? []) drawScorch(this, sc.x, sc.y, sc.seed);
     const type = this.roomDef.type;
     if (type === 'devStart') {
@@ -256,6 +310,9 @@ export class RoomScene extends Phaser.Scene {
       this.dummy = new DummyCat(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 12, 'gray');
     } else if (type === 'treasure') {
       this.chest = new Chest(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 20, !!this.roomState.chestOpen);
+    } else if (this.roomDef.chest) {
+      // Sala comum com baú no meio (madeira abre sem chave; dourado precisa de chave)
+      this.chest = new Chest(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 20, !!this.roomState.chestOpen, this.roomDef.chest);
     } else if (type === 'boss' && this.roomState.cleared) {
       this.placeTrapdoor(false);
     } else if (type === 'shop') {
@@ -281,7 +338,8 @@ export class RoomScene extends Phaser.Scene {
     this.player.on('dead', () => this.showGameOver());
 
     // Salas com inimigos: fecha as portas até limpar
-    if ((type === 'normal' || type === 'boss') && !this.roomState.cleared) this.spawnEnemies(spawn);
+    this.addPropColliders();
+    if ((type === 'normal' || type === 'boss' || type === 'devProps') && !this.roomState.cleared) this.spawnEnemies(spawn);
 
     const kb = this.input.keyboard!;
     const K = Phaser.Input.Keyboard.KeyCodes;
@@ -353,6 +411,7 @@ export class RoomScene extends Phaser.Scene {
       this.tweens.add({ targets: hint, alpha: 0, duration: 800, delay: 2000, onComplete: () => hint.destroy() });
     }
 
+    this.updateElevation();
     const shot = this.player.update(this.move, aim, dt, time);
     if (shot) {
       this.furballs.push(
@@ -369,6 +428,8 @@ export class RoomScene extends Phaser.Scene {
         this.dummy.takeHit(d.x, d.y, f.damage);
         if (this.showDamage) this.showDamageNumber(this.dummy.x, this.dummy.y - 70, f.damage);
       }
+      // Pedras seguram a bola de pelo
+      if (!f.dead && this.rockAt(x, y)) f.burst();
       for (const e of this.enemies) {
         if (f.dead || !e.hits(x, y, f.hitRadius)) continue;
         const d = f.direction;
@@ -402,7 +463,11 @@ export class RoomScene extends Phaser.Scene {
       this.createBossBar(boss);
     } else {
       // 2 a 4 inimigos no nível 1, e mais um a cada nível (até 8)
-      const count = Math.min(2 + Math.floor(Math.random() * 3) + (level - 1), 8);
+      const kinds: EnemyKind[] =
+        this.roomDef.type === 'devProps'
+          ? ['fly', 'pale'] // teste: um que voa (alcança a mesa) e um de chão (não alcança)
+          : Array.from({ length: Math.min(2 + Math.floor(Math.random() * 3) + (level - 1), 8) }, () => weightedPick(ENEMY_POOL));
+      const count = kinds.length;
       const placed: { x: number; y: number }[] = [];
       for (let i = 0; i < count; i++) {
         let x = 0;
@@ -412,11 +477,19 @@ export class RoomScene extends Phaser.Scene {
           y = Phaser.Math.Between(FLOOR.y + 70, FLOOR.y + FLOOR.height - 50);
           const farFromCat = Phaser.Math.Distance.Between(x, y, from.x, from.y) > 260;
           const apart = placed.every((p) => Phaser.Math.Distance.Between(x, y, p.x, p.y) > 80);
-          if (farFromCat && apart) break;
+          if (farFromCat && apart && !this.propAt(x, y) && !this.propAt(x, y - 40)) break;
         }
         placed.push({ x, y });
-        this.enemies.push(new Enemy(this, x, y, weightedPick(ENEMY_POOL), level));
+        this.enemies.push(new Enemy(this, x, y, kinds[i], level));
       }
+    }
+    // Quem anda no chão esbarra em pedras, buracos, móveis e no baú; quem voa passa por cima
+    for (const e of this.enemies) {
+      if (e.flies) continue;
+      for (const o of this.propObjs) {
+        if (o.body) this.physics.add.collider(e.body, o.body, undefined, () => !o.prop.broken);
+      }
+      if (this.chest) this.physics.add.collider(e.body, this.chest.body);
     }
     for (const side of Object.keys(this.doors) as DoorSide[]) {
       if (!this.isLocked(side)) this.bars.set(side, drawDoorBars(this, side));
@@ -428,12 +501,15 @@ export class RoomScene extends Phaser.Scene {
     const feet = this.player.feet;
     const world = {
       target: feet,
-      shoot: (x: number, y: number, vx: number, vy: number) => this.enemyShots.push(new EnemyShot(this, x, y, vx, vy)),
+      shoot: (x: number, y: number, vx: number, vy: number, flying: boolean) =>
+        this.enemyShots.push(new EnemyShot(this, x, y, vx, vy, flying)),
     };
     for (const e of this.enemies) {
       e.update(dt, time, world);
       // Encostar em qualquer inimigo (boss incluído) tira 1 de vida: meio coração
-      if (!e.dead && !e.spawning && !this.player.dead) {
+      // Em cima da mesa, só quem voa alcança o gato
+      const reachable = this.playerHeight < 2 || e.flies;
+      if (!e.dead && !e.spawning && !this.player.dead && reachable) {
         if (Phaser.Math.Distance.Between(feet.x, feet.y - 8, e.x, e.body.center.y) < e.radius + 14) {
           this.player.takeDamage(this.enemyDamage, e.x, e.y);
         }
@@ -441,7 +517,8 @@ export class RoomScene extends Phaser.Scene {
     }
     for (const shot of this.enemyShots) {
       shot.update(dt);
-      if (!shot.dead && !this.player.dead && Phaser.Math.Distance.Between(shot.x, shot.y, feet.x, feet.y) < 20) {
+      const shotReaches = this.playerHeight < 2 || shot.fromFlyer;
+      if (!shot.dead && !this.player.dead && shotReaches && Phaser.Math.Distance.Between(shot.x, shot.y, feet.x, feet.y) < 20) {
         shot.burst();
         this.player.takeDamage(this.enemyDamage, shot.x, shot.y);
       }
@@ -452,6 +529,12 @@ export class RoomScene extends Phaser.Scene {
       fill.width = 396 * Math.max(boss.hp, 0) / boss.maxHp;
     }
 
+    for (const e of this.enemies) {
+      if (e.dead && e.kind !== 'boss' && !this.dropped.has(e)) {
+        this.dropped.add(e);
+        this.enemyDrop(e.x, e.y);
+      }
+    }
     const wasFighting = this.enemies.length > 0;
     this.enemies = this.enemies.filter((e) => !e.dead);
     if (wasFighting && !this.enemies.length) this.onRoomCleared();
@@ -486,7 +569,117 @@ export class RoomScene extends Phaser.Scene {
       return;
     }
     const drop = weightedPick(CLEAR_DROPS);
-    if (drop !== 'none') this.pickups.push(new Pickup(this, cx, cy, drop, true));
+    if (drop !== 'none') {
+      const spot = this.freeDropSpot(cx, cy + (this.chest ? 70 : 0));
+      this.pickups.push(new Pickup(this, spot.x, spot.y, drop, true));
+    }
+  }
+
+  /** Sorteio do que um inimigo solta ao morrer: moeda 50%, chave/bomba 10%, item 5%. */
+  private enemyDrop(x: number, y: number) {
+    const drop = weightedPick(ENEMY_DROPS);
+    if (drop === 'none') return;
+    const spot = this.freeFloorSpot(x, y);
+    if (drop === 'item') {
+      const id = randomItemOf(rollRarity(this.run.stats.luck));
+      this.items.push(new ItemPickup(this, spot.x, spot.y, id, { kind: 'pop' }));
+    } else {
+      this.pickups.push(new Pickup(this, spot.x, spot.y, drop, true));
+    }
+  }
+
+  // ---------- Pedras, buracos e móveis ----------
+
+  /** Monta os elementos da sala (sorteados na primeira visita e guardados na partida). */
+  private buildProps(firstVisit: boolean) {
+    const type = this.roomDef.type;
+    if (!this.roomState.props) {
+      this.roomState.props =
+        type === 'normal' ? generateProps(Object.keys(this.doors) as DoorSide[]) : type === 'devProps' ? devPropsLayout() : [];
+    }
+    void firstVisit;
+    for (const prop of this.roomState.props) this.propObjs.push(this.buildProp(prop));
+  }
+
+  private buildProp(prop: Prop): PropObj {
+    const r = propRect(prop);
+    const cx = r.x + r.w / 2;
+    const bottom = r.y + r.h;
+    if (prop.kind === 'hole') {
+      // Buraco: poço escuro com borda de terra
+      const g = this.add.graphics().setDepth(-58);
+      g.fillStyle(0x2a1a10).fillRoundedRect(r.x + 3, r.y + 3, r.w - 6, r.h - 6, 14);
+      g.fillStyle(0x050302).fillRoundedRect(r.x + 8, r.y + 10, r.w - 16, r.h - 16, 12);
+      g.fillStyle(0x000000, 0.6).fillRoundedRect(r.x + 8, r.y + 10, r.w - 16, 12, 8);
+      const body = this.physics.add.staticBody(r.x + 8, r.y + 8, r.w - 16, r.h - 14);
+      return { prop, body };
+    }
+    const tex = prop.kind === 'rock' ? (prop.broken ? 'rubble' : 'rock') : prop.broken ? `${prop.kind}_broken` : prop.kind;
+    const lift = prop.kind === 'table' ? 14 : prop.kind === 'chair' ? 8 : 4;
+    const sprite = this.add.image(cx, bottom + lift, tex).setOrigin(0.5, 1).setDepth(bottom);
+    if (prop.broken) sprite.setDepth(-57); // destroços ficam no chão
+    const body =
+      prop.kind === 'table'
+        ? this.physics.add.staticBody(r.x + 4, r.y + 8, r.w - 8, r.h - 12)
+        : this.physics.add.staticBody(r.x + 8, r.y + 12, r.w - 16, r.h - 18);
+    return { prop, body, sprite };
+  }
+
+  /** Colisões do gato: pedras e buracos sempre; a mesa só quando ele está no chão. */
+  private addPropColliders() {
+    for (const o of this.propObjs) {
+      const p = o.prop;
+      if (!o.body || p.kind === 'chair') continue;
+      if (p.kind === 'table') {
+        this.physics.add.collider(this.player.body, o.body, undefined, () => !p.broken && this.playerHeight === 0);
+      } else {
+        this.physics.add.collider(this.player.body, o.body, undefined, () => !p.broken);
+      }
+    }
+  }
+
+  /** Elemento (não destruído) no ponto do chão, se houver. */
+  private propAt(x: number, y: number): Prop | undefined {
+    const { col, row } = tileAt(x, y);
+    const p = occupancy(this.roomState.props ?? []).get(`${col},${row}`);
+    return p && !p.broken ? p : undefined;
+  }
+
+  private rockAt(x: number, y: number) {
+    return this.propAt(x, y)?.kind === 'rock';
+  }
+
+  /**
+   * Em cima de quê o gato está: cadeira (sobe direto do chão) ou mesa (só vindo da cadeira ou
+   * já em cima dela). Ajusta a altura do desenho para ele aparecer em cima do móvel.
+   */
+  private updateElevation() {
+    const feet = this.player.feet;
+    const under = this.propAt(feet.x, feet.y - 8);
+    let h = 0;
+    if (under?.kind === 'chair') h = 1;
+    else if (under?.kind === 'table' && this.playerHeight >= 1) h = 2;
+    this.playerHeight = h;
+    const bottom = under ? propRect(under).y + TILE + 2 : 0;
+    this.player.setElevation(h === 1 ? CHAIR_LIFT : h === 2 ? TABLE_LIFT : 0, h ? bottom : 0);
+  }
+
+  /** Ponto livre mais perto de (x, y) para soltar algo no chão (fora de pedras, buracos e móveis). */
+  private freeFloorSpot(x: number, y: number) {
+    if (!this.propAt(x, y)) return { x, y };
+    const { col, row } = tileAt(x, y);
+    for (let radius = 1; radius < 6; radius++) {
+      for (let dc = -radius; dc <= radius; dc++) {
+        for (let dr = -radius; dr <= radius; dr++) {
+          const c = col + dc;
+          const r = row + dr;
+          if (c < 0 || r < 0 || c >= ROOM_COLS || r >= ROOM_ROWS) continue;
+          const spot = tileCenter(c, r);
+          if (!this.propAt(spot.x, spot.y - 8)) return spot;
+        }
+      }
+    }
+    return { x, y };
   }
 
   /** Barra de vida do boss, embaixo da tela. */
@@ -567,15 +760,35 @@ export class RoomScene extends Phaser.Scene {
       this.cameras.main.shake(80, 0.003);
       return;
     }
-    this.run.unlocked.push(doorKey(this.roomId, this.doors[side]!));
     this.updateCounters(usedGolden ? undefined : 'key');
-    // O cadeado cai e a porta some
-    const lock = this.locks.get(side);
-    this.locks.delete(side);
-    if (lock) {
-      this.tweens.add({ targets: lock, alpha: 0, y: lock.y + 10, duration: 300, onComplete: () => lock.destroy() });
+    this.unlockDoor(side);
+  }
+
+  /** Abre a porta trancada: o cadeado cai e a porta some. */
+  private unlockDoor(side: DoorSide) {
+    this.run.unlocked.push(doorKey(this.roomId, this.doors[side]!));
+    for (const g of [this.locks.get(side), this.cracks.get(side)]) {
+      if (g) this.tweens.add({ targets: g, alpha: 0, y: g.y + 10, duration: 300, onComplete: () => g.destroy() });
     }
+    this.locks.delete(side);
+    this.cracks.delete(side);
     this.doorPauseUntil = this.time.now + 450; // dá tempo de ver a porta abrindo antes de passar
+  }
+
+  /**
+   * Bomba perto de uma porta trancada: 50% de abrir na hora; senão ela racha, e a próxima
+   * bomba abre com certeza.
+   */
+  private bombDoor(side: DoorSide) {
+    const key = doorKey(this.roomId, this.doors[side]!);
+    if (this.run.cracked.includes(key) || Math.random() < 0.5) {
+      this.unlockDoor(side);
+      this.showBanner('Porta aberta!', 'A explosão arrombou a porta', '#f2c879');
+      return;
+    }
+    this.run.cracked.push(key);
+    this.cracks.set(side, drawDoorCracks(this, side));
+    this.showBanner('Porta rachada', 'Mais uma bomba e ela abre', '#c8c0b8');
   }
 
   private goToRoom(room: RoomId, enterFrom: DoorSide) {
@@ -601,6 +814,10 @@ export class RoomScene extends Phaser.Scene {
   /** O baú é trancado: gasta uma chave (ou usa a dourada) para abrir. */
   private tryOpenChest() {
     if (!this.chest || this.chest.opened || this.time.now < this.nagUntil) return;
+    if (this.chest.variant === 'wood') {
+      this.openWoodChest();
+      return;
+    }
     const usedGolden = this.run.inventory.goldenKey;
     if (!useKey(this.run.inventory)) {
       this.nagUntil = this.time.now + 1500;
@@ -611,9 +828,10 @@ export class RoomScene extends Phaser.Scene {
     this.openChest();
   }
 
-  private openChest() {
+  /** Abre o baú dourado. Aberto com bomba (`factor` < 1), as chances de item bom caem. */
+  private openChest(factor = 1) {
     if (!this.chest || !this.chest.open()) return;
-    const rarity = rollRarity(this.run.stats.luck);
+    const rarity = rollRarity(this.run.stats.luck, Math.random, factor);
     const id = randomItemOf(rarity);
     const spot = this.freeDropSpot(this.chest.x, this.chest.y);
     this.items.push(
@@ -623,17 +841,47 @@ export class RoomScene extends Phaser.Scene {
     this.showBanner(`Item ${info.name.toLowerCase()}!`, ITEMS[id].name, info.color);
   }
 
+  /** Baú de madeira: abre sem chave e solta 2 ou 3 coletáveis (às vezes um item). */
+  private openWoodChest() {
+    if (!this.chest || !this.chest.open()) return;
+    const { x, y } = this.chest;
+    const n = 2 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < n; i++) {
+      const spot = this.freeDropSpot(x, y);
+      this.pickups.push(new Pickup(this, spot.x, spot.y, weightedPick(WOOD_CHEST_DROPS), true));
+    }
+    if (Math.random() < WOOD_CHEST_ITEM_CHANCE) {
+      const spot = this.freeDropSpot(x, y);
+      const id = randomItemOf(rollRarity(this.run.stats.luck));
+      this.items.push(new ItemPickup(this, spot.x, spot.y, id, { kind: 'toss', fromX: x, fromY: y - 30 }));
+    }
+  }
+
   private freeDropSpot(cx: number, cy: number) {
     for (const [dx, dy] of DROP_SPOTS) {
       const x = cx + dx;
       const y = cy + dy;
-      if (!this.items.some((i) => !i.collected && Phaser.Math.Distance.Between(i.x, i.y, x, y) < 40)) return { x, y };
+      const taken =
+        this.items.some((i) => !i.collected && Phaser.Math.Distance.Between(i.x, i.y, x, y) < 40) ||
+        this.pickups.some((p) => !p.collected && Phaser.Math.Distance.Between(p.x, p.y, x, y) < 34);
+      if (!taken && !this.propAt(x, y) && !this.propAt(x, y - 20)) return { x, y };
     }
     return { x: cx + Phaser.Math.Between(-120, 120), y: cy + Phaser.Math.Between(60, 140) };
   }
 
   /** Botão de teste: na sala inicial repõe os itens; na do tesouro, fecha o baú de novo. */
   private respawnItems(animate = true) {
+    if (this.roomDef.type === 'devProps') {
+      // Sala de obstáculos: tudo volta ao começo (pedras e móveis inteiros, baú fechado, inimigos)
+      this.saveRoom();
+      this.roomState.props = devPropsLayout();
+      this.roomState.cleared = false;
+      this.roomState.chestOpen = false;
+      this.roomState.scorches = [];
+      this.leaving = true;
+      this.scene.restart({ run: this.run, room: this.roomId } satisfies RoomData);
+      return;
+    }
     if (this.chest) {
       if (this.chest.opened) this.chest.close();
       return;
@@ -670,6 +918,9 @@ export class RoomScene extends Phaser.Scene {
     // O gato empurra a bomba, mas só depois de sair de cima dela.
     bomb.colliders.push(this.physics.add.collider(this.player.body, bomb.body, undefined, () => bomb.solid));
     if (this.dummy) bomb.colliders.push(this.physics.add.collider(bomb.body, this.dummy.body));
+    for (const o of this.propObjs) {
+      if (o.body) bomb.colliders.push(this.physics.add.collider(bomb.body, o.body, undefined, () => !o.prop.broken));
+    }
     if (this.chest) bomb.colliders.push(this.physics.add.collider(bomb.body, this.chest.body));
     for (const other of this.bombs) {
       const c = this.physics.add.collider(bomb.body, other.body);
@@ -691,6 +942,32 @@ export class RoomScene extends Phaser.Scene {
   private explode(bomb: Bomb) {
     const { x, y } = bomb;
     playExplosion(this, x, y);
+    // Baú por perto: abre sem chave (o dourado fica com chances piores, até a metade)
+    if (this.chest && !this.chest.opened && Phaser.Math.Distance.Between(x, y, this.chest.x, this.chest.y) < BLAST_RADIUS + 20) {
+      if (this.chest.variant === 'wood') this.openWoodChest();
+      else this.openChest(Phaser.Math.FloatBetween(0.5, 1));
+    }
+    // Portas trancadas por perto: podem abrir ou rachar
+    for (const side of Object.keys(this.doors) as DoorSide[]) {
+      if (!this.isLocked(side)) continue;
+      const d = DOOR_POS[side];
+      // Ponto da porta na beira do chão
+      const ex = Phaser.Math.Clamp(d.x, FLOOR.x, FLOOR.x + FLOOR.width);
+      const ey = Phaser.Math.Clamp(d.y, FLOOR.y, FLOOR.y + FLOOR.height);
+      if (Phaser.Math.Distance.Between(x, y, ex, ey) < BLAST_RADIUS + 20) this.bombDoor(side);
+    }
+    // Pedras, cadeiras e mesas por perto viram destroços (não são empurradas)
+    for (const o of this.propObjs) {
+      const p = o.prop;
+      if (p.broken || !breakable(p)) continue;
+      const r = propRect(p);
+      const nx = Phaser.Math.Clamp(x, r.x, r.x + r.w);
+      const ny = Phaser.Math.Clamp(y, r.y, r.y + r.h);
+      if (Phaser.Math.Distance.Between(x, y, nx, ny) > BLAST_RADIUS - 20) continue;
+      p.broken = true;
+      const tex = p.kind === 'rock' ? 'rubble' : `${p.kind}_broken`;
+      o.sprite?.setTexture(tex).setDepth(-57);
+    }
     const seed = `${Date.now()}-${Math.random()}`;
     drawScorch(this, x, y, seed);
     (this.roomState.scorches ??= []).push({ x, y, seed });

@@ -14,10 +14,12 @@ export class Chest {
     readonly x: number,
     readonly y: number,
     public opened: boolean,
+    /** "gold" precisa de chave e dá um item; "wood" abre sem chave e dá coletáveis. */
+    readonly variant: 'gold' | 'wood' = 'gold',
   ) {
     scene.add.ellipse(x, y - 4, 70, 18, 0x000000, 0.35).setDepth(y - 1);
     this.sprite = scene.add
-      .sprite(x, y, 'chest', opened ? 1 : 0)
+      .sprite(x, y, variant === 'wood' ? 'chest_wood' : 'chest', opened ? 1 : 0)
       .setOrigin(0.5, 0.97)
       .setScale(SCALE)
       .setDepth(y);

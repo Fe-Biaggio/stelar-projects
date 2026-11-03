@@ -19,6 +19,10 @@ export class PreloadScene extends Phaser.Scene {
     this.load.spritesheet('enemies', 'assets/enemies.png', { frameWidth: 72, frameHeight: 72 });
     for (const b of ['bat', 'rat', 'dog', 'bird', 'human']) this.load.image(`boss_${b}`, `assets/boss_${b}.png`);
     this.load.spritesheet('chest', 'assets/chest.png', { frameWidth: 80, frameHeight: 80 });
+    this.load.spritesheet('chest_wood', 'assets/chest_wood.png', { frameWidth: 80, frameHeight: 80 });
+    for (const p of ['rock', 'rubble', 'chair', 'chair_broken', 'table', 'table_broken']) {
+      this.load.image(p, `assets/${p}.png`);
+    }
   }
 
   create() {

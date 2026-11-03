@@ -33,8 +33,8 @@ export const BOSSES: Record<BossType, BossSpec> = {
 export interface EnemyWorld {
   /** Pés do gato. */
   target: { x: number; y: number };
-  /** Cria um tiro inimigo saindo de (x, y) com velocidade (vx, vy). */
-  shoot(x: number, y: number, vx: number, vy: number): void;
+  /** Cria um tiro inimigo saindo de (x, y) com velocidade (vx, vy). `flying`: quem atirou voa. */
+  shoot(x: number, y: number, vx: number, vy: number, flying: boolean): void;
 }
 
 interface EnemySpec {
@@ -129,6 +129,11 @@ export class Enemy {
     return this.kind === 'boss' ? BOSSES[this.bossType].name : ENEMY_NAMES[this.kind];
   }
 
+  /** Voa? (passa por cima de buracos e alcança o gato em cima da mesa) */
+  get flies() {
+    return this.spec.flying > 0;
+  }
+
   get radius() {
     return this.spec.radius;
   }
@@ -200,7 +205,7 @@ export class Enemy {
         this.timer -= dt;
         if (this.timer <= 0) {
           this.timer = 2.4;
-          for (const [sx, sy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) world.shoot(this.x, this.y, sx * 230, sy * 230);
+          for (const [sx, sy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) world.shoot(this.x, this.y, sx * 230, sy * 230, this.flies);
           this.squash();
         }
         break;
@@ -245,7 +250,7 @@ export class Enemy {
         const offset = Math.random() * Math.PI;
         for (let i = 0; i < n; i++) {
           const a = offset + (i / n) * Math.PI * 2;
-          world.shoot(this.x, this.y, Math.cos(a) * spec.ring.speed, Math.sin(a) * spec.ring.speed);
+          world.shoot(this.x, this.y, Math.cos(a) * spec.ring.speed, Math.sin(a) * spec.ring.speed, this.flies);
         }
         this.squash();
         // O humano pisa forte: a tela treme
@@ -260,7 +265,7 @@ export class Enemy {
         const n = spec.spread.count;
         for (let i = 0; i < n; i++) {
           const a = base + (i - (n - 1) / 2) * spec.spread.angle;
-          world.shoot(this.x, this.y, Math.cos(a) * spec.spread.speed, Math.sin(a) * spec.spread.speed);
+          world.shoot(this.x, this.y, Math.cos(a) * spec.spread.speed, Math.sin(a) * spec.spread.speed, this.flies);
         }
         this.squash();
       }
@@ -363,6 +368,8 @@ export class EnemyShot {
     public y: number,
     private readonly vx: number,
     private readonly vy: number,
+    /** Tiro de inimigo que voa: alcança o gato em cima da mesa. */
+    readonly fromFlyer = false,
   ) {
     this.shadow = scene.add.ellipse(x, y, 12, 5, 0x000000, 0.3);
     this.sprite = scene.add.circle(x, y - 22, 7, 0xd8302a).setStrokeStyle(2, 0x3a0a08);

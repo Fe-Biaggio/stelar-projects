@@ -3,6 +3,7 @@ import { ItemId } from './items';
 import { Inventory, PickupKind, newInventory } from './pickups';
 import { HP_PER_HEART, Stats, newStats } from './stats';
 import { FloorMap, devFloor, generateFloor } from './world/floor';
+import { Prop } from './world/props';
 
 // Estado de uma partida: o que precisa sobreviver quando o gato troca de sala.
 
@@ -45,6 +46,8 @@ export interface RoomState {
   chestOpen?: boolean;
   /** Inimigos já derrotados (as portas ficam abertas). */
   cleared?: boolean;
+  /** Pedras, buracos e móveis da sala (sorteados na primeira visita). */
+  props?: Prop[];
 }
 
 export interface Run {
@@ -62,6 +65,8 @@ export interface Run {
   floor: FloorMap;
   /** Portas trancadas já abertas neste nível (ver doorKey em world/floor.ts). */
   unlocked: string[];
+  /** Portas trancadas rachadas por uma bomba (a próxima bomba abre com certeza). */
+  cracked: string[];
   /** Estado das salas já visitadas neste nível. */
   rooms: Record<RoomId, RoomState>;
 }
@@ -84,6 +89,7 @@ export function newRun(cat: CatId, mode: GameMode = 'dev'): Run {
     level: 1,
     floor: mode === 'game' ? generateFloor(1) : devFloor(),
     unlocked: [],
+    cracked: [],
     rooms: {},
   };
 }
@@ -99,6 +105,7 @@ export function startNextLevel(run: Run) {
   run.level += 1;
   run.inventory.goldenKey = false;
   run.unlocked = [];
+  run.cracked = [];
   run.rooms = {};
   run.floor = generateFloor(run.level);
 }

@@ -47,8 +47,24 @@ export function rarityOdds(luck: number): Record<Rarity, number> {
   return { common: round(common), uncommon: round(uncommon), rare: round(rare), epic: round(epic) };
 }
 
-export function rollRarity(luck: number, rng: () => number = Math.random): Rarity {
+/**
+ * Chances de um baú dourado aberto com bomba: as chances de incomum, raro e épico são
+ * multiplicadas por `factor` (0,5 a 1) e o que sobra vai para o comum.
+ */
+export function damagedOdds(luck: number, factor: number): Record<Rarity, number> {
   const odds = rarityOdds(luck);
+  let moved = 0;
+  for (const r of ['uncommon', 'rare', 'epic'] as Rarity[]) {
+    const reduced = odds[r] * factor;
+    moved += odds[r] - reduced;
+    odds[r] = Math.round(reduced * 10) / 10;
+  }
+  odds.common = Math.round((odds.common + moved) * 10) / 10;
+  return odds;
+}
+
+export function rollRarity(luck: number, rng: () => number = Math.random, factor = 1): Rarity {
+  const odds = factor < 1 ? damagedOdds(luck, factor) : rarityOdds(luck);
   let roll = rng() * 100;
   // Do melhor para o pior, para arredondamentos nunca favorecerem o comum.
   for (const r of [...RARITY_ORDER].reverse()) {
