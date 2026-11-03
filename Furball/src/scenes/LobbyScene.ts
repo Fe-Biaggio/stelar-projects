@@ -36,7 +36,7 @@ export class LobbyScene extends Phaser.Scene {
     return this.view?.players.find((p) => p.id === myId);
   }
 
-  create(data: { resume?: boolean }) {
+  create(data: { resume?: boolean; autoStart?: boolean }) {
     this.starting = false;
     this.dynamic = [];
     drawRoom(this);
@@ -51,6 +51,8 @@ export class LobbyScene extends Phaser.Scene {
     this.menu.onBack = () => this.leave();
     this.render();
     this.cameras.main.fadeIn(200);
+    // Botão "Recomeçar (teste)": volta e já começa outra partida igual
+    if (data.autoStart && this.isHost) this.time.delayedCall(400, () => this.startGame());
   }
 
   // ---------- Quem hospeda ----------

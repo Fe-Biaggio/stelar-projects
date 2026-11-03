@@ -42,5 +42,21 @@ installAudioUnlock(game);
 if (import.meta.env.DEV) {
   const w = window as unknown as Record<string, unknown>;
   w.furball = game;
-  w.furballDev = { net, session, vs, lobbyConfig, joinRoom, privateId };
+  const sims: unknown[] = [];
+  w.furballDev = {
+    net,
+    session,
+    vs,
+    lobbyConfig,
+    joinRoom,
+    privateId,
+    sims,
+    // Simula partidas VS só com bots: furballDev.simVs(4, 12, 12) ou simMany([[4,12,12], ...])
+    simVs: async (n: number, w2: number, h: number, speed?: number) => (await import('./dev/simVs')).simVs(game, n, w2, h, speed),
+    simMany: async (list: [number, number, number][], speed?: number) => {
+      const { simVs } = await import('./dev/simVs');
+      for (const [n, w2, h] of list) sims.push(await simVs(game, n, w2, h, speed));
+      return sims;
+    },
+  };
 }

@@ -19,6 +19,8 @@ export interface BotView {
   doors: { side: DoorSide; score: number }[];
   vs: boolean;
   combat: boolean;
+  /** Próximo ponto do caminho até `to`, desviando dos obstáculos. */
+  step: (to: { x: number; y: number }) => { x: number; y: number };
 }
 
 const ALIGN = 30; // px: alinhado o bastante para atirar
@@ -96,13 +98,7 @@ export class BotBrain {
       this.door = undefined;
     } else if (v.friend && !v.vs) {
       // Co-op: acompanha o parceiro
-      const dx = v.friend.x - v.me.x;
-      const dy = v.friend.y - v.me.y;
-      if (Math.hypot(dx, dy) > 110) {
-        const n = Math.hypot(dx, dy);
-        mx = dx / n;
-        my = dy / n;
-      }
+      if (Math.hypot(v.friend.x - v.me.x, v.friend.y - v.me.y) > 110) [mx, my] = toward(v.me, v.step(v.friend));
     } else if (v.doors.length) {
       // Sala vazia: vai para uma porta (troca de ideia se demorar demais)
       this.doorTime -= THINK;
@@ -111,19 +107,21 @@ export class BotBrain {
         this.doorTime = 8;
       }
       const p = DOOR_POINT[this.door];
-      const dx = p.x - v.me.x;
-      const dy = p.y - v.me.y;
-      const n = Math.hypot(dx, dy);
-      if (n < 50) [mx, my] = p.push;
-      else {
-        mx = dx / n;
-        my = dy / n;
-      }
+      if (Math.hypot(p.x - v.me.x, p.y - v.me.y) < 50) [mx, my] = p.push;
+      else [mx, my] = toward(v.me, v.step(p));
     }
     if (this.dodgeTime > 0 && this.dodge) [mx, my] = this.dodge;
     this.input = { ...this.input, mx: round(mx), my: round(my), aim, fire: false };
     return this.input;
   }
+}
+
+/** Direção (normalizada) de `from` até `to`. */
+function toward(from: { x: number; y: number }, to: { x: number; y: number }): [number, number] {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const n = Math.hypot(dx, dy) || 1;
+  return [dx / n, dy / n];
 }
 
 function round(n: number) {
@@ -146,5 +144,5 @@ function nearest(me: { x: number; y: number }, list: { x: number; y: number }[])
 /** Sorteia uma porta, com mais chance para as de nota maior. */
 function pickDoor(doors: { side: DoorSide; score: number }[]): DoorSide {
   const sorted = [...doors].sort((a, b) => b.score - a.score);
-  return Math.random() < 0.6 ? sorted[0].side : sorted[Math.floor(Math.random() * sorted.length)].side;
+  return Math.random() < 0.75 ? sorted[0].side : sorted[Math.floor(Math.random() * sorted.length)].side;
 }

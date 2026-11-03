@@ -644,9 +644,24 @@ export class RoomScene extends Phaser.Scene {
 
   /** Onde o gato aparece: na porta por onde entrou, ou embaixo do centro no começo. */
   private spawnPoint(enterFrom: DoorSide | undefined, order = 0): { x: number; y: number; facing: Facing } {
-    const cy = GAME_HEIGHT / 2 + 10;
-    // Vários gatos entrando juntos ficam lado a lado
+    // Vários gatos entrando juntos ficam lado a lado, mas nunca em cima de pedra, buraco ou
+    // fogueira: se o lugar estiver ocupado, tenta o outro lado e por fim o meio da porta
     const off = order === 0 ? 0 : (order % 2 ? 1 : -1) * Math.ceil(order / 2) * 46;
+    for (const o of [off, -off, 0]) {
+      const pt = this.spawnAt(enterFrom, o);
+      if (!this.blockedAt(pt.x, pt.y) && !this.blockedAt(pt.x, pt.y - 20)) return pt;
+    }
+    return this.spawnAt(enterFrom, 0);
+  }
+
+  /** Tem algo que bloqueia o gato neste ponto do chão? */
+  private blockedAt(x: number, y: number) {
+    const p = this.propAt(x, y);
+    return !!p && blocksWalk(p);
+  }
+
+  private spawnAt(enterFrom: DoorSide | undefined, off: number): { x: number; y: number; facing: Facing } {
+    const cy = GAME_HEIGHT / 2 + 10;
     switch (enterFrom) {
       case 'left':
         return { x: FLOOR.x + 36, y: cy + off, facing: 'right' };
@@ -709,7 +724,7 @@ export class RoomScene extends Phaser.Scene {
   /** Lê teclado, controle e toque para o gato deste aparelho. */
   private readLocalInput() {
     const slot = this.localSlot;
-    if (!slot) return;
+    if (!slot || this.hs?.bots.has(slot.ps.idx)) return; // simulação: bot no lugar de quem hospeda
     const move = slot.move;
     const k = this.moveKeys;
     move.set((k.d.isDown ? 1 : 0) - (k.a.isDown ? 1 : 0), (k.s.isDown ? 1 : 0) - (k.w.isDown ? 1 : 0));
@@ -736,7 +751,7 @@ export class RoomScene extends Phaser.Scene {
       if (brain && slot.player && !slot.player.dead) hs.inputs.set(slot.ps.idx, brain.think(this.botView(slot), dt));
     }
     for (const slot of this.slots) {
-      if (slot.local) continue;
+      if (slot.local && !hs.bots.has(slot.ps.idx)) continue;
       const inp = hs.input(slot.ps.idx);
       if (!inp) continue;
       slot.move.set(inp.mx, inp.my);
@@ -752,7 +767,9 @@ export class RoomScene extends Phaser.Scene {
   private botView(slot: Slot): BotView {
     const me = slot.player!.body.center;
     const targets: { x: number; y: number }[] = this.enemies.filter((e) => !e.dead).map((e) => ({ x: e.x, y: e.y }));
-    if (this.isVs) {
+    // VS: briga com os outros gatos, menos quando a sala vai sumir (aí só pensa em sair)
+    const doomed = this.isVs && !!vs.director?.isDoomedSoon(this.roomDef);
+    if (this.isVs && !doomed) {
       for (const s of this.alivePlayers) if (s !== slot) targets.push({ x: s.player!.body.center.x, y: s.player!.body.center.y });
     }
     const friendSlot = this.alivePlayers.find((s) => s !== slot && !this.hs?.bots.has(s.ps.idx)) ?? this.alivePlayers.find((s) => s !== slot);
@@ -773,7 +790,64 @@ export class RoomScene extends Phaser.Scene {
         doors.push({ side, score });
       }
     }
-    return { me: { x: me.x, y: me.y }, targets, friend, doors, vs: this.isVs, combat: this.inCombat };
+    const feet = slot.player!.feet;
+    return {
+      me: { x: me.x, y: me.y },
+      targets,
+      friend,
+      doors,
+      vs: this.isVs,
+      combat: this.inCombat,
+      step: (to) => this.walkStep(feet, to),
+    };
+  }
+
+  /**
+   * Próximo ponto do caminho (pelos tiles livres) de `from` até `to`, desviando de pedras,
+   * buracos, fogueiras e mesa. Sem caminho, devolve o próprio destino.
+   */
+  private walkStep(from: { x: number; y: number }, to: { x: number; y: number }) {
+    const occ = occupancy(this.roomState.props ?? []);
+    const inside = (c: number, r: number) => c >= 0 && r >= 0 && c < ROOM_COLS && r < ROOM_ROWS;
+    const free = (c: number, r: number) => {
+      if (!inside(c, r)) return false;
+      const p = occ.get(`${c},${r}`);
+      return !p || !blocksWalk(p);
+    };
+    const clamp = (t: { col: number; row: number }) => ({
+      col: Phaser.Math.Clamp(t.col, 0, ROOM_COLS - 1),
+      row: Phaser.Math.Clamp(t.row, 0, ROOM_ROWS - 1),
+    });
+    const s = clamp(tileAt(from.x, from.y - 10));
+    const g = clamp(tileAt(to.x, to.y - 10));
+    if (s.col === g.col && s.row === g.row) return to;
+    // Distâncias a partir do destino
+    const dist = new Map<string, number>([[`${g.col},${g.row}`, 0]]);
+    const queue = [g];
+    while (queue.length) {
+      const t = queue.shift()!;
+      const d = dist.get(`${t.col},${t.row}`)!;
+      for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const n = { col: t.col + dc, row: t.row + dr };
+        const k = `${n.col},${n.row}`;
+        if (dist.has(k) || !free(n.col, n.row)) continue;
+        dist.set(k, d + 1);
+        queue.push(n);
+      }
+    }
+    let best: { col: number; row: number } | undefined;
+    let bestD = dist.get(`${s.col},${s.row}`) ?? Infinity;
+    for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const n = { col: s.col + dc, row: s.row + dr };
+      const d = dist.get(`${n.col},${n.row}`);
+      if (d !== undefined && d < bestD) {
+        bestD = d;
+        best = n;
+      }
+    }
+    if (!best) return to;
+    const c = tileCenter(best.col, best.row);
+    return { x: c.x, y: c.y - 10 };
   }
 
   /** Mira pelas setas/analógico; sem mira, o botão de atirar usa a direção para onde o gato olha. */
@@ -792,7 +866,6 @@ export class RoomScene extends Phaser.Scene {
 
   update(time: number, deltaMs: number) {
     if (this.leaving || this.finished) {
-      if (this.finished) this.checkRemoteRestart();
       this.hs?.pump(this);
       return;
     }
@@ -2006,6 +2079,11 @@ export class RoomScene extends Phaser.Scene {
     const label = this.isMulti ? '↺ Sala (Esc)' : '↺ Início (Esc)';
     const back = this.makeButton(GAME_WIDTH - 20 - 66, y, 132, label, () => this.backToSelect());
     if (this.isMulti) markOwner(back.parentContainer!, net.myIdx);
+    if (this.isMulti && this.hs) {
+      // TESTE (tirar na versão final): recomeça a partida na hora, com os mesmos jogadores
+      const again = this.makeButton(GAME_WIDTH - 162 - 74, y, 148, '↻ Recomeçar (teste)', () => returnToLobby(this.game, true));
+      markOwner(again.parentContainer!, net.myIdx);
+    }
     if (!this.isDev) return; // os botões de teste só existem no modo desenvolvedor
     const type = this.roomDef.type;
     const refill = type === 'treasure' ? '+ Novo baú' : type === 'shop' ? '+ Repor loja' : type === 'devNpc' ? '+ Repor gatinho' : '+ Repor itens';
@@ -2063,32 +2141,6 @@ export class RoomScene extends Phaser.Scene {
     );
   }
 
-  /**
-   * Fim da partida multiplayer: qualquer jogador (não só quem hospeda) pode apertar para todos
-   * voltarem juntos para a sala de espera.
-   */
-  private checkRemoteRestart() {
-    const hs = this.hs;
-    if (!hs || this.leaving) return;
-    if (this.finishedAt === undefined) {
-      this.finishedAt = this.time.now;
-      for (const idx of hs.inputs.keys()) hs.takeActions(idx); // ignora o que foi apertado antes
-      return;
-    }
-    if (this.time.now - this.finishedAt < 1200) return;
-    for (const idx of [...hs.inputs.keys()]) {
-      if (hs.bots.has(idx)) continue;
-      const acts = hs.takeActions(idx);
-      if (acts.bomb || acts.item || acts.tap || hs.input(idx)?.fire) {
-        this.leaving = true;
-        returnToLobby(this.game);
-        return;
-      }
-    }
-  }
-
-  private finishedAt?: number;
-
   /** Recomeçar depois do fim: no multiplayer, volta todo mundo para a sala de espera. */
   private restartGame() {
     if (this.isMulti) {
@@ -2131,7 +2183,7 @@ export class RoomScene extends Phaser.Scene {
   }
 
   private restartHint() {
-    if (this.isMulti) return 'R, A ou toque: todos voltam para a sala de espera';
+    if (this.isMulti) return 'Quem hospeda (R, A ou toque) leva todos de volta para a sala de espera';
     return this.touch ? 'Toque para jogar de novo' : 'R para jogar de novo  ·  Esc para trocar de gato';
   }
 

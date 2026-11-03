@@ -284,7 +284,7 @@ export const vs: { director?: VsDirector } = {};
  * Volta todo mundo para a sala de espera (fim de partida ou o anfitrião apertou "Sala").
  * Só quem hospeda chama.
  */
-export function returnToLobby(game: Phaser.Game) {
+export function returnToLobby(game: Phaser.Game, autoStart = false) {
   vs.director?.dispose();
   vs.director = undefined;
   endSession();
@@ -294,5 +294,5 @@ export function returnToLobby(game: Phaser.Game) {
     if (key.startsWith('Room@')) game.scene.remove(key);
     else if (key === 'Room') game.scene.stop(key);
   }
-  game.scene.start('Lobby', { resume: true });
+  game.scene.start('Lobby', { resume: true, autoStart });
 }
