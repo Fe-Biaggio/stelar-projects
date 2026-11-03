@@ -170,7 +170,7 @@ export class Enemy {
     this.intended?.add(new Phaser.Math.Vector2(dirX * push, dirY * push));
     const boss = this.kind === 'boss';
     for (const el of elements) {
-      if (el === 'fire') this.burnTime = 3; // pega fogo: perde vida por 3 s
+      if (el === 'fire') this.burnTime = 3; // pega fogo: perde 0,2 de vida por segundo, por 3 s
       if (el === 'ice') this.freezeTime = boss ? 0.35 : 1; // para um instante
       if (el === 'sand' || el === 'water') {
         // Lento por 3 s (areia um pouco mais)
@@ -189,7 +189,7 @@ export class Enemy {
       this.burnTick -= dt;
       if (this.burnTick <= 0) {
         this.burnTick = 0.5;
-        this.hp -= 0.4;
+        this.hp -= 0.1; // 0,2 de dano por segundo
         this.hurtFlash = 0.06;
         if (this.hp <= 0) {
           this.die();

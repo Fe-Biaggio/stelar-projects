@@ -19,6 +19,8 @@ export interface Prop {
   w: number;
   /** Destruído por bomba (pedra, cadeira ou mesa): vira destroços e não bloqueia mais. */
   broken?: boolean;
+  /** Fogueira: acertos de bola de pelo comum (apaga no 3º). */
+  hits?: number;
 }
 
 /** Retângulo do prop no chão, em pixels. */

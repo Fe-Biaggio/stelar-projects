@@ -797,6 +797,7 @@ export class RoomScene extends Phaser.Scene {
         if (fire) {
           f.burst();
           if (f.elements.includes('water') || f.elements.includes('ice')) this.putOut(fire);
+          else if (!f.elements.includes('fire')) this.hitFire(fire);
         }
       }
       for (const e of this.enemies) {
@@ -1047,6 +1048,7 @@ export class RoomScene extends Phaser.Scene {
     const lift = prop.kind === 'table' ? 14 : prop.kind === 'chair' ? 8 : prop.kind === 'fire' ? 10 : 4;
     const sprite = this.add.image(cx, bottom + lift, tex).setOrigin(0.5, 1).setDepth(bottom);
     if (prop.broken) sprite.setDepth(-57); // destroços ficam no chão
+    else if (prop.kind === 'fire') sprite.setScale(this.fireScale(prop));
     const body =
       prop.kind === 'table'
         ? this.physics.add.staticBody(r.x + 4, r.y + 8, r.w - 8, r.h - 12)
@@ -1079,10 +1081,28 @@ export class RoomScene extends Phaser.Scene {
     }
   }
 
-  /** Apaga a fogueira (bomba ou bola molhada/congelada). */
+  /** Tamanho da chama: diminui a cada acerto de bola de pelo comum. */
+  private fireScale(p: Prop) {
+    return 1 - (p.hits ?? 0) * 0.22;
+  }
+
+  /** Bola de pelo comum: a fogueira diminui e apaga no 3º acerto. */
+  private hitFire(o: PropObj) {
+    o.prop.hits = (o.prop.hits ?? 0) + 1;
+    if (o.prop.hits >= 3) {
+      this.putOut(o);
+      return;
+    }
+    if (o.sprite) this.tweens.add({ targets: o.sprite, scale: this.fireScale(o.prop), duration: 150, ease: 'Back.easeOut' });
+    const r = propRect(o.prop);
+    const puff = this.add.circle(r.x + r.w / 2, r.y + 10, 7, 0xb8b0a8, 0.5).setDepth(r.y + 70);
+    this.tweens.add({ targets: puff, y: puff.y - 30, alpha: 0, scale: 1.6, duration: 500, onComplete: () => puff.destroy() });
+  }
+
+  /** Apaga a fogueira (bomba, 3 bolas comuns ou bola molhada/congelada). */
   private putOut(o: PropObj) {
     o.prop.broken = true;
-    o.sprite?.setTexture('campfire_out').setDepth(-57);
+    o.sprite?.setTexture('campfire_out').setScale(1).setDepth(-57);
     const r = propRect(o.prop);
     for (let i = 0; i < 6; i++) {
       const puff = this.add.circle(r.x + r.w / 2 + Phaser.Math.Between(-14, 14), r.y + 20, Phaser.Math.Between(5, 9), 0xb8b0a8, 0.6).setDepth(r.y + 70);
