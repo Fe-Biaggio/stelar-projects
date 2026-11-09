@@ -13,7 +13,8 @@ pelo celular (Remote Control): mande prints com SendUserFile.
   `python tools/artifact_page.py`, e publicar `dist/furball.html` com cada arquivo de
   `dist/assets/` em `files` (remover o `index-*.js` antigo com `null`).
 - Versão pública: https://fe-biaggio.github.io/stelar-projects/ (GitHub Pages; o workflow
-  `.github/workflows/furball-pages.yml` na raiz publica a cada push no `main`).
+  `.github/workflows/furball-pages.yml` na raiz publica a cada push no `main`; o mesmo
+  workflow publica o Lotofácil em `/lotofacil/`).
 - Commits: sempre em `main`, com push, mensagem "Furball: …". Atualize `PENDENCIAS.md` e o
   README a cada etapa. Não commite os notebooks nem `Aula 04/` (não são deste projeto).
 
