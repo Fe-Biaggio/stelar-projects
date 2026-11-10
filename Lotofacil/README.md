@@ -34,6 +34,17 @@ comparar o resultado com jogos aleatórios.
 - **Desempenho:** soma de todas as apostas conferidas + validação histórica (refaz a análise nos últimos
   N concursos usando só o passado e compara com o acaso).
 
+## Banco compartilhado do site público (Supabase)
+
+1. Criar conta grátis em https://supabase.com e um projeto novo (região São Paulo).
+2. No projeto: **SQL Editor** → colar o conteúdo de `supabase.sql` → **Run**.
+3. Em **Project Settings → API** (ou "Connect"), copiar a **Project URL** e a chave **anon / publishable**.
+4. Colocar as duas em `app/js/config.js` e publicar. A chave pública pode ficar no site; nunca use a
+   chave `service_role` / secret.
+
+Sem senha nos perfis (como pedido): qualquer pessoa com o endereço do site pode ver e mudar os dados.
+Em Ajustes há um botão para enviar ao banco o que estava salvo só no navegador.
+
 ## Como funciona por dentro
 
 - `app/` é o site (HTML/CSS/JS puro, sem build). `app/data/resultados.js` é o histórico.

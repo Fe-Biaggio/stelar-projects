@@ -32,6 +32,7 @@
   async function iniciar() {
     LF.dados.montar(LF.dados.cacheCaixa());
     A.store = await LF.abrirStore();
+    if (A.store.erroOnline) setTimeout(() => aviso(A.store.erroOnline), 500);
     try {
       await recarregarResultadosManuais();
     } catch (e) {
@@ -196,6 +197,8 @@
     const modo =
       A.store.modo === 'compartilhado'
         ? 'Os perfis e jogos ficam salvos neste link e todo mundo que tem acesso vê os mesmos dados.'
+        : A.store.modo === 'online'
+        ? 'Os perfis e jogos ficam salvos no banco do site: quem abrir o site, em qualquer aparelho, vê os mesmos dados.'
         : 'Os perfis e jogos ficam salvos neste navegador. Use Ajustes → Backup para levar para outro aparelho.';
     return `
     <div class="cab"><div><h1>Quem vai jogar?</h1><p class="suave">Escolha um perfil. Tudo o que você montar fica guardado nele. ${modo}</p></div></div>
@@ -993,6 +996,7 @@
   // ---------- Ajustes ----------
   TELAS.ajustes = () => {
     const comp = A.store.modo === 'compartilhado';
+    const online = A.store.modo === 'online';
     return `<div class="cab"><div><h1>Ajustes</h1></div></div>
     <div class="grade2">
       <div class="bloco"><h2>Preço da aposta</h2>
@@ -1006,7 +1010,13 @@
         <h3>Digitar resultado</h3>${formResultado()}
         <p class="suave peq">Útil para conferir na hora. Um resultado digitado ${comp ? 'fica visível para todos deste link e ' : ''}é trocado pelo oficial quando ele chegar.</p></div>
       <div class="bloco"><h2>Onde os dados ficam</h2>
-        <p>${comp ? '<b>Compartilhado.</b> Perfis e apostas ficam neste link do Claude; quem tem acesso vê e usa os mesmos perfis.' : '<b>Neste navegador.</b> Perfis e apostas ficam guardados só neste aparelho. Faça backup para levar para outro.'}</p>
+        <p>${comp
+          ? '<b>Compartilhado.</b> Perfis e apostas ficam neste link do Claude; quem tem acesso vê e usa os mesmos perfis.'
+          : online
+          ? '<b>Banco compartilhado.</b> Perfis e apostas ficam no banco do site; qualquer pessoa que abrir o site vê e usa os mesmos perfis, em qualquer aparelho.'
+          : '<b>Neste navegador.</b> Perfis e apostas ficam guardados só neste aparelho. Faça backup para levar para outro.'}</p>
+        ${online && LF.dadosLocais() ? `<div class="nota">Este navegador tem perfis ou apostas salvos antes do banco compartilhado.
+          <div class="linha" style="margin-top:8px"><button class="btn peq ok" data-acao="enviar-locais">Enviar para o banco compartilhado</button></div></div>` : ''}
         <div class="linha"><button class="btn" data-acao="backup">Baixar backup (.json)</button>
           ${comp ? '' : '<label class="btn">Restaurar backup<input type="file" id="restaurar" accept=".json,application/json" hidden></label>'}</div>
         <p class="suave peq">O backup tem os perfis, as apostas e os resultados digitados.</p></div>
@@ -1177,6 +1187,22 @@
       render();
     },
     validar: () => validar(),
+    'enviar-locais': async (el) => {
+      el.disabled = true;
+      try {
+        const d = LF.dadosLocais();
+        await A.store.importar(d);
+        LF.ls.set('lotofacil.dados.v1', null);
+        A.perfis = await A.store.perfis();
+        await recarregarResultadosManuais();
+        recalcular();
+        await carregarApostas();
+        aviso('Dados deste navegador enviados para o banco compartilhado.');
+      } catch (e) {
+        aviso(e.message);
+      }
+      render();
+    },
     backup: () => backup(),
     'buscar-caixa': async (el) => {
       el.disabled = true;
@@ -1297,7 +1323,7 @@
     else if (t.id === 'restaurar' && t.files[0]) {
       try {
         const json = JSON.parse(await t.files[0].text());
-        A.store.importar(json);
+        await A.store.importar(json);
         A.perfis = await A.store.perfis();
         await recarregarResultadosManuais();
         recalcular();

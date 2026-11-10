@@ -124,8 +124,85 @@
       } catch (e) {
         /* cai para o modo local */
       }
+      return local();
+    }
+    // Site público: banco Supabase se estiver configurado em js/config.js.
+    const cfg = window.LOTO_CONFIG || {};
+    if (cfg.supabaseUrl && cfg.supabaseKey) {
+      const s = supabase(cfg.supabaseUrl, cfg.supabaseKey);
+      try {
+        await s.testar();
+        return s;
+      } catch (e) {
+        const l = local();
+        l.erroOnline = 'Não consegui falar com o banco compartilhado; salvando só neste navegador por enquanto.';
+        return l;
+      }
     }
     return local();
+  };
+
+  // Supabase pela API REST (sem biblioteca). Tabelas perfis/apostas/resultados com o objeto em "dados".
+  function supabase(url, chave) {
+    const base = url.replace(/\/+$/, '') + '/rest/v1/';
+    const cab = { apikey: chave, 'Content-Type': 'application/json' };
+    if (!chave.startsWith('sb_')) cab.Authorization = 'Bearer ' + chave;
+    const pedir = async (caminho, opt = {}) => {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 15000);
+      try {
+        const r = await fetch(base + caminho, { ...opt, headers: { ...cab, ...(opt.headers || {}) }, signal: ctl.signal });
+        if (!r.ok) throw new Error('Banco compartilhado respondeu ' + r.status + ': ' + (await r.text()).slice(0, 160));
+        const txt = await r.text();
+        return txt ? JSON.parse(txt) : null;
+      } catch (e) {
+        if (e.name === 'AbortError') throw new Error('O banco compartilhado demorou demais para responder.');
+        throw e;
+      } finally {
+        clearTimeout(t);
+      }
+    };
+    const enc = encodeURIComponent;
+    const lista = async (tabela, filtro = '') => (await pedir(`${tabela}?select=dados${filtro}`)).map((x) => x.dados);
+    const gravar = (tabela, linha) =>
+      pedir(tabela, { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(linha) });
+    const apagar = (tabela, filtro) => pedir(`${tabela}?${filtro}`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } });
+    return {
+      modo: 'online',
+      testar: () => pedir('perfis?select=id&limit=1'),
+      async perfis() {
+        const ps = await lista('perfis');
+        if (!ps.find((p) => p.id === 'principal')) {
+          ps.push(PRINCIPAL);
+          gravar('perfis', { id: 'principal', dados: PRINCIPAL }).catch(() => {});
+        }
+        return ps;
+      },
+      salvarPerfil: (p) => gravar('perfis', { id: p.id, dados: p }),
+      async excluirPerfil(id) {
+        await apagar('apostas', 'perfil_id=eq.' + enc(id));
+        await apagar('perfis', 'id=eq.' + enc(id));
+      },
+      apostas: (perfilId) => lista('apostas', '&perfil_id=eq.' + enc(perfilId)),
+      salvarAposta: (a) => gravar('apostas', { id: a.id, perfil_id: a.perfilId, dados: a }),
+      excluirAposta: (id) => apagar('apostas', 'id=eq.' + enc(id)),
+      resultados: () => lista('resultados'),
+      salvarResultado: (r) => gravar('resultados', { id: String(r.c), dados: r }),
+      // Envia para o banco tudo o que estava salvo só neste navegador.
+      async importar(json) {
+        for (const p of Object.values(json.perfis || {})) await gravar('perfis', { id: p.id, dados: p });
+        for (const a of Object.values(json.apostas || {})) await gravar('apostas', { id: a.id, perfil_id: a.perfilId, dados: a });
+        for (const r of Object.values(json.resultados || {})) await gravar('resultados', { id: String(r.c), dados: r });
+      },
+    };
+  }
+
+  // O que estava salvo neste navegador antes de ligar o banco compartilhado.
+  LF.dadosLocais = function () {
+    const d = LF.ls.get(CHAVE, null);
+    if (!d) return null;
+    const n = Object.keys(d.apostas || {}).length + Object.keys(d.perfis || {}).filter((k) => k !== 'principal').length;
+    return n ? d : null;
   };
 
   // Baixar arquivo: no Claude usa a permissão de download; fora dele, um link normal.
