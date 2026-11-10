@@ -17,6 +17,9 @@ comparar o resultado com jogos aleatórios.
   atraso atual e máximo; e cartões que mostram o que de fato veio no concurso seguinte a jogos parecidos
   com o último (pares/ímpares, baixas/altas, soma, repetidas, moldura, primos, vizinhas, maior espaço,
   Fibonacci, múltiplos de 3, linhas e colunas do volante).
+- **Dois modos de pontuação:** *Análise de tendência* (equilíbrio, tendência, atraso, compensação com pesos) e
+  *Análise de acontecimento* (cada análise ligada dá 0,4 se a condição aconteceu no último concurso, +40% do que
+  falta para 1 a cada concurso seguido antes, até quebrar; os pontos são somados).
 - **Montar jogos:** a análise dá pontos a cada dezena e sugere obrigatórias, opcionais e recusadas
   (toque na dezena para mudar). Escolha vários jogos de 15 ou um jogo de 16 a 20 dezenas, pela quantidade
   ou por valor máximo em R$. Filtros pelos padrões do histórico. Pesos de cada métrica ajustáveis.

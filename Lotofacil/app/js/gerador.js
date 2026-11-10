@@ -199,7 +199,8 @@
     const nos = [], alea = [];
     const distNos = {}, distAlea = {};
     for (let i = ini; i < draws.length; i++) {
-      const a = LF.analisar(draws, i, pesos);
+      let a = LF.analisar(draws, i, pesos);
+      if (opts.modo === 'acontecimento') a = LF.aplicarAcontecimento(a, draws, i, opts.ativos);
       const cat = LF.sugerirCategorias(a, nObrig, nRecus);
       const scores = {};
       a.nums.forEach((x) => (scores[x.n] = x.score));

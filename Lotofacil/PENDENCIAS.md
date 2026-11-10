@@ -22,6 +22,10 @@
   esperado e risco (simulação), testes estatísticos (qui-quadrado, autocorrelação) e ciclo das dezenas.
 - Achado: no histórico completo as dezenas não saem uniformes (p < 0,001), mas nos últimos 500/100 sim.
 
+- Modo "Análise de acontecimento" (9 análises liga/desliga, sequência 0,4 + 40% do restante).
+  Validação 100 concursos: 8,86 acertos (análise) × 9,02 (aleatório).
+- Banco Supabase pronto em `js/config.js`/`supabase.sql`; aguardando URL e chave do usuário.
+
 ## Limitações conhecidas
 - No site público os dados ficam só no navegador (backup em Ajustes). Multiusuário de verdade = link do Claude.
 - O link do Claude não consegue buscar na Caixa (bloqueado); ele usa o arquivo publicado + resultados digitados.

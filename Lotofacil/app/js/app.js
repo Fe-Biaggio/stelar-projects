@@ -72,9 +72,16 @@
     LF.dados.montar([...LF.dados.cacheCaixa(), ...A.manuais]);
   }
 
+  // Pontuação das dezenas no modo escolhido (tendência ou acontecimento).
+  function analisarAtual() {
+    const draws = LF.dados.draws, M = A.m;
+    const a = LF.analisar(draws, undefined, M ? M.pesos : null, { completo: true });
+    return M && M.modo === 'acontecimento' ? LF.aplicarAcontecimento(a, draws, undefined, M.ativos) : a;
+  }
+
   function recalcular() {
     const draws = LF.dados.draws;
-    A.analise = LF.analisar(draws, undefined, A.m ? A.m.pesos : null, { completo: true });
+    A.analise = analisarAtual();
     A.estudo = LF.estudoMetricas(draws);
     A.testes = LF.testesEstatisticos(draws);
     A.ciclos = LF.ciclos(draws);
@@ -87,6 +94,8 @@
     const ant = A.m;
     A.m = {
       pesos: ant ? ant.pesos : { ...LF.PESOS_PADRAO },
+      modo: ant ? ant.modo : LF.ls.get('lotofacil.modo', 'tendencia'),
+      ativos: ant ? ant.ativos : { ...LF.ATIVOS_PADRAO, ...LF.ls.get('lotofacil.ativos', {}) },
       nObrig: ant ? ant.nObrig : 5,
       nRecus: ant ? ant.nRecus : 5,
       cat: null,
@@ -101,7 +110,7 @@
       filtros: manter && ant ? ant.filtros : LF.filtrosPadrao(A.estudo),
       alvo: LF.dados.ultimo().c + 1,
     };
-    A.analise = LF.analisar(LF.dados.draws, undefined, A.m.pesos, { completo: true });
+    A.analise = analisarAtual();
     A.m.cat = LF.sugerirCategorias(A.analise, A.m.nObrig, A.m.nRecus);
   }
 
@@ -497,12 +506,12 @@
     a.nums.forEach((x) => (sc[x.n] = x));
     let sel = '';
     for (let n = 1; n <= 25; n++)
-      sel += `<button class="c ${M.cat[n]}" data-acao="ciclar" data-n="${n}" title="${esc(LF.motivos(sc[n], M.pesos).join('; ') || 'sem destaque')}" aria-label="Dezena ${n}: ${
+      sel += `<button class="c ${M.cat[n]}" data-acao="ciclar" data-n="${n}" title="${esc((sc[n].motivos || LF.motivos(sc[n], M.pesos)).join('; ') || 'sem destaque')}" aria-label="Dezena ${n}: ${
         { obrig: 'obrigatória', opc: 'opcional', recus: 'recusada' }[M.cat[n]]
       }">${LF.dd(n)}<small>${LF.num(sc[n].score, 1)}</small></button>`;
     const porque = [...a.nums]
       .sort((p, q) => q.score - p.score)
-      .map((x) => `<tr><td><span class="bola-p ${M.cat[x.n]}">${LF.dd(x.n)}</span></td><td class="num"><b>${LF.num(x.score, 2)}</b></td><td style="text-align:left;white-space:normal">${esc(LF.motivos(x, M.pesos).join('; ') || '–')}</td></tr>`)
+      .map((x) => `<tr><td><span class="bola-p ${M.cat[x.n]}">${LF.dd(x.n)}</span></td><td class="num"><b>${LF.num(x.score, 2)}</b></td><td style="text-align:left;white-space:normal">${esc((x.motivos || LF.motivos(x, M.pesos)).join('; ') || '–')}</td></tr>`)
       .join('');
     const pesos = Object.keys(LF.PESOS_PADRAO)
       .map(
@@ -510,6 +519,22 @@
         <input type="range" min="0" max="2" step="0.1" value="${M.pesos[p]}" data-peso="${p}"><span class="num">${LF.num(M.pesos[p], 1)}</span></label>`
       )
       .join('');
+    const acont = M.modo === 'acontecimento';
+    const listaAc = LF.ACONTECIMENTOS.map((ac) => {
+      let resumo = '<span class="suave">desligada</span>';
+      if (M.ativos[ac.id]) {
+        const pts = a.nums.map((x) => ({ n: x.n, ...(x.partes ? x.partes[ac.id] : { k: 0, pts: 0 }) })).filter((x) => x.k > 0);
+        const maxK = Math.max(0, ...pts.map((x) => x.k));
+        resumo = pts.length
+          ? `Agora: ${pts.length} dezenas pontuam; maior sequência ${maxK} ${maxK === 1 ? 'concurso' : 'concursos'} (+${LF.num(1 - Math.pow(0.6, maxK), 2)}): ${pts
+              .filter((x) => x.k === maxK)
+              .map((x) => LF.dd(x.n))
+              .join(' ')}`
+          : 'Agora: nenhuma dezena pontua.';
+      }
+      return `<label class="filtro" style="grid-template-columns:auto 1fr;align-items:start"><input type="checkbox" data-ac="${ac.id}" ${M.ativos[ac.id] ? 'checked' : ''}>
+        <span><b>${esc(ac.nome)}</b><br><span class="suave peq">${esc(ac.desc)}</span><br><span class="peq">${resumo}</span></span></label>`;
+    }).join('');
     const { preco, q, custo, total: comb, excede, falta } = quantidadeJogos();
     let blocoTodas = '';
     if (M.todas && falta >= 0 && falta <= c.opc) {
@@ -534,6 +559,11 @@
     <div class="grade2">
       <div class="bloco">
         <div class="linha entre"><h2>1. Dezenas</h2><button class="btn peq" data-acao="refazer-sugestao">Refazer sugestão</button></div>
+        <div class="seg" role="group" aria-label="Modo da pontuação"><button class="${!acont ? 'on' : ''}" data-acao="modo" data-modo="tendencia">Análise de tendência</button>
+          <button class="${acont ? 'on' : ''}" data-acao="modo" data-modo="acontecimento">Análise de acontecimento</button></div>
+        <p class="suave peq">${acont
+          ? 'Cada análise ligada dá pontos à dezena: 0,4 se a condição aconteceu no último concurso, mais 40% do que falta para 1 a cada concurso seguido antes dele (0,4 → 0,64 → 0,78…), até a sequência quebrar. Os pontos das análises são somados.'
+          : 'Mistura equilíbrio de longo prazo, tendência recente, atraso e compensação do último jogo, com os pesos abaixo.'}</p>
         <div class="volante sel">${sel}</div>
         <div class="legenda"><span class="l-obrig">Obrigatórias: <b>${c.obrig}</b></span><span class="l-opc">Opcionais: <b>${c.opc}</b></span><span class="l-recus">Recusadas: <b>${c.recus}</b></span></div>
         <div class="linha peq">
@@ -542,8 +572,12 @@
         </div>
         <p class="suave peq">O número pequeno é a pontuação da dezena. Passe o mouse (ou veja a lista abaixo) para saber o motivo.</p>
         <details><summary>Por que cada dezena</summary><div class="tabela-wrap"><table><tbody>${porque}</tbody></table></div></details>
-        <details><summary>Pesos das métricas</summary><div class="pesos">${pesos}</div>
-          <div class="linha" style="margin-top:10px"><button class="btn peq" data-acao="pesos-padrao">Voltar ao padrão</button></div></details>
+        ${acont
+          ? `<details open><summary>Análises que pontuam (${LF.ACONTECIMENTOS.filter((x) => M.ativos[x.id]).length} de ${LF.ACONTECIMENTOS.length} ligadas)</summary>
+          <div class="pesos">${listaAc}</div>
+          <div class="linha" style="margin-top:10px"><button class="btn peq" data-acao="ativos-padrao">Voltar ao padrão</button></div></details>`
+          : `<details><summary>Pesos das métricas</summary><div class="pesos">${pesos}</div>
+          <div class="linha" style="margin-top:10px"><button class="btn peq" data-acao="pesos-padrao">Voltar ao padrão</button></div></details>`}
       </div>
       <div class="bloco">
         <h2>2. Formato e quantidade</h2>
@@ -750,6 +784,8 @@
       garantia: G.garantia,
       filtros: G.formato !== 'fechamento' && !M.todas ? JSON.parse(JSON.stringify(M.filtros)) : null,
       evitarPopulares: !!M.evitarPopulares,
+      modo: M.modo,
+      ativos: M.modo === "acontecimento" ? { ...M.ativos } : null,
       sim: G.sim,
       simAlea: G.simAlea,
       pontos: Object.fromEntries(A.analise.nums.map((x) => [x.n, Math.round(x.score * 100) / 100])),
@@ -874,6 +910,9 @@
       <h1 style="margin-top:10px">Concurso ${ap.concurso}</h1><p class="suave">${ap.jogos.length} jogos de ${ap.tamanho} dezenas · ${LF.reais(ap.custo)} · criada em ${LF.dataBR(ap.criadoEm)} com dados até o concurso ${ap.baseConcurso}</p></div></div>
       ${conferencia}
       ${ap.sim || ap.garantia ? `<div class="bloco"><h2>Análise salva com a aposta</h2>
+        <p class="peq">Pontuação: <b>${ap.modo === 'acontecimento' ? 'análise de acontecimento' : 'análise de tendência'}</b>${
+          ap.modo === 'acontecimento' && ap.ativos ? ` (${LF.ACONTECIMENTOS.filter((x) => ap.ativos[x.id]).map((x) => esc(x.nome)).join(', ')})` : ''
+        }.</p>
         ${ap.garantia ? `<div class="nota"><b>Garantia do fechamento:</b> ${esc(ap.garantia)}.</div>` : ''}
         ${blocoRisco(ap.sim, ap.simAlea)}</div>` : ''}
       <div class="bloco"><div class="linha entre"><h2>Seus jogos</h2><div class="linha">
@@ -960,7 +999,7 @@
       <div class="bloco"><h2>Suas apostas conferidas</h2>${blocoReal}</div>
       <div class="bloco"><h2>Validação histórica</h2>
         <p class="suave peq">Volta no tempo: para cada um dos últimos concursos, faz a análise só com os concursos anteriores, gera os jogos com as configurações atuais
-        (pesos, ${A.m.nObrig} obrigatórias, ${A.m.nRecus} recusadas, filtros padrão) e confere com o que saiu, junto com o mesmo número de jogos aleatórios.</p>
+        (${A.m.modo === "acontecimento" ? "análise de acontecimento com as análises ligadas" : "análise de tendência com os pesos atuais"}, ${A.m.nObrig} obrigatórias, ${A.m.nRecus} recusadas, filtros padrão) e confere com o que saiu, junto com o mesmo número de jogos aleatórios.</p>
         <div class="linha">
           <label class="linha peq">Concursos <select class="in" id="vConc">${[50, 100, 200, 400].map((v) => `<option ${V.concursos === v ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
           <label class="linha peq">Jogos por concurso <select class="in" id="vJogos">${[5, 10, 20, 50].map((v) => `<option ${V.jogos === v ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
@@ -979,7 +1018,7 @@
     try {
       V.res = await LF.validarHistorico(
         LF.dados.draws,
-        { concursos: V.concursos, jogos: V.jogos, tamanho: 15, nObrig: A.m.nObrig, nRecus: A.m.nRecus, pesos: A.m.pesos },
+        { concursos: V.concursos, jogos: V.jogos, tamanho: 15, nObrig: A.m.nObrig, nRecus: A.m.nRecus, pesos: A.m.pesos, modo: A.m.modo, ativos: A.m.ativos },
         (p) => {
           V.prog = p;
           const b = $('#vProg');
@@ -1118,6 +1157,16 @@
       A.m.pesos = { ...LF.PESOS_PADRAO };
       reanalisar();
     },
+    modo: (el) => {
+      A.m.modo = el.dataset.modo;
+      LF.ls.set('lotofacil.modo', A.m.modo);
+      reanalisar();
+    },
+    'ativos-padrao': () => {
+      A.m.ativos = { ...LF.ATIVOS_PADRAO };
+      LF.ls.set('lotofacil.ativos', A.m.ativos);
+      reanalisar();
+    },
     'filtros-padrao': () => {
       A.m.filtros = LF.filtrosPadrao(A.estudo);
       render();
@@ -1219,7 +1268,7 @@
   };
 
   function reanalisar() {
-    A.analise = LF.analisar(LF.dados.draws, undefined, A.m.pesos, { completo: true });
+    A.analise = analisarAtual();
     A.m.cat = LF.sugerirCategorias(A.analise, A.m.nObrig, A.m.nRecus);
     A.gerado = null;
     render();
@@ -1289,6 +1338,10 @@
       M.fech[t.id === 'fechM' ? 'm' : 't'] = +t.value;
       A.gerado = null;
       render();
+    } else if (t.dataset.ac) {
+      M.ativos[t.dataset.ac] = t.checked;
+      LF.ls.set('lotofacil.ativos', M.ativos);
+      reanalisar();
     } else if (t.id === 'evitarPopulares') {
       M.evitarPopulares = t.checked;
       A.gerado = null;

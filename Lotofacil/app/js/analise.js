@@ -199,9 +199,101 @@
     return r;
   };
 
+  // ---------- Análise de acontecimento ----------
+  // Cada análise olha os concursos de trás para frente. Se a condição vale no último concurso, a dezena
+  // ganha 0,4; se vale também no anterior, ganha 40% do que falta para 1 (0,4 + 0,6×0,4 = 0,64), e assim
+  // por diante até a sequência quebrar. A pontuação final da dezena é a soma das análises ligadas.
+  const PRIMOS = [2, 3, 5, 7, 11, 13, 17, 19, 23];
+  const fDe = (d) => d._f || (d._f = LF.metricas(d.m));
+  LF.ACONTECIMENTOS = [
+    {
+      id: 'ausencia', nome: 'Não saiu', padrao: true,
+      desc: 'A dezena não saiu no concurso. Cada concurso seguido sem ela soma mais pontos.',
+      cond: (n, d) => !(d.m & (1 << (n - 1))),
+    },
+    {
+      id: 'paridade', nome: 'Paridade oposta', padrao: true,
+      desc: 'Dezenas ímpares pontuam quando o concurso teve maioria de pares (8 ou mais), e pares pontuam quando teve maioria de ímpares.',
+      cond: (n, d) => (n % 2 === 0 ? fDe(d).pares <= 7 : fDe(d).pares >= 8),
+    },
+    {
+      id: 'altura', nome: 'Baixas × altas', padrao: true,
+      desc: 'Dezenas altas (14–25) pontuam quando o concurso teve maioria de baixas (8 ou mais de 1–13), e baixas pontuam quando teve maioria de altas.',
+      cond: (n, d) => (n <= 13 ? fDe(d).baixos <= 7 : fDe(d).baixos >= 8),
+    },
+    {
+      id: 'linha', nome: 'Linha fraca', padrao: true,
+      desc: 'A linha da dezena no volante teve 2 ou menos dezenas sorteadas (a média é 3).',
+      cond: (n, d) => fDe(d).linhas[LF.linhaDe(n)] <= 2,
+    },
+    {
+      id: 'coluna', nome: 'Coluna fraca', padrao: true,
+      desc: 'A coluna da dezena no volante teve 2 ou menos dezenas sorteadas (a média é 3).',
+      cond: (n, d) => fDe(d).colunas[LF.colunaDe(n)] <= 2,
+    },
+    {
+      id: 'moldura', nome: 'Moldura × miolo', padrao: true,
+      desc: 'Dezenas da borda pontuam quando a moldura veio abaixo da média (9 ou menos das 16); dezenas do miolo pontuam quando o miolo veio abaixo da média (5 ou menos das 9).',
+      cond: (n, d) => (LF.GRUPOS.moldura & (1 << (n - 1)) ? fDe(d).moldura <= 9 : 15 - fDe(d).moldura <= 5),
+    },
+    {
+      id: 'primos', nome: 'Primos', padrao: true,
+      desc: 'Primos pontuam quando o concurso teve poucos primos (4 ou menos; a média é 5,4); os não primos pontuam quando teve muitos (6 ou mais).',
+      cond: (n, d) => (PRIMOS.includes(n) ? fDe(d).primos <= 4 : fDe(d).primos >= 6),
+    },
+    {
+      id: 'buraco', nome: 'Dentro de um buraco', padrao: true,
+      desc: 'Quando o concurso teve dezenas muito espaçadas, as que ficaram num buraco de 4 ou mais números sem sorteio pontuam (a ideia de que depois vêm mais juntas).',
+      cond: (n, d) => {
+        if (d.m & (1 << (n - 1))) return false;
+        let a = n, b = n;
+        while (a > 1 && !(d.m & (1 << (a - 2)))) a--;
+        while (b < 25 && !(d.m & (1 << b))) b++;
+        return b - a + 1 >= 4;
+      },
+    },
+    {
+      id: 'repetiu', nome: 'Saiu no anterior', padrao: false,
+      desc: 'Em média 9 das 15 dezenas repetem do concurso anterior. Pontua quem saiu (o oposto de "Não saiu"; ligue só um dos dois).',
+      cond: (n, d) => !!(d.m & (1 << (n - 1))),
+    },
+  ];
+  LF.ATIVOS_PADRAO = Object.fromEntries(LF.ACONTECIMENTOS.map((x) => [x.id, x.padrao]));
+
+  // Sequência de uma condição: quantos concursos seguidos (do último para trás) e os pontos.
+  function sequencia(cond, n, draws, upto) {
+    let k = 0, pts = 0;
+    for (let i = upto - 1; i >= 0 && k < 60; i--) {
+      if (!cond(n, draws[i])) break;
+      pts += (1 - pts) * 0.4;
+      k++;
+    }
+    return { k, pts };
+  }
+
+  // Troca a pontuação da análise de tendência pela de acontecimento (mantém frequências e atrasos).
+  LF.aplicarAcontecimento = function (analise, draws, upto, ativos) {
+    upto = upto ?? draws.length;
+    ativos = ativos || LF.ATIVOS_PADRAO;
+    const nums = analise.nums.map((x) => {
+      const partes = {};
+      let score = 0;
+      const motivos = [];
+      for (const ac of LF.ACONTECIMENTOS) {
+        if (!ativos[ac.id]) continue;
+        const s = sequencia(ac.cond, x.n, draws, upto);
+        partes[ac.id] = s;
+        score += s.pts;
+        if (s.k) motivos.push(`${ac.nome}: ${s.k} ${s.k === 1 ? 'concurso' : 'seguidos'} (+${LF.num(s.pts, 2)})`);
+      }
+      return { ...x, desempate: x.score, score, partes, motivos };
+    });
+    return { ...analise, nums, modo: 'acontecimento' };
+  };
+
   // Divide as dezenas em obrigatórias / opcionais / recusadas pela pontuação.
   LF.sugerirCategorias = function (analise, nObrig, nRecus) {
-    const ord = [...analise.nums].sort((a, b) => b.score - a.score);
+    const ord = [...analise.nums].sort((a, b) => b.score - a.score || (b.desempate || 0) - (a.desempate || 0));
     const cat = {};
     ord.forEach((x, i) => (cat[x.n] = i < nObrig ? 'obrig' : i >= 25 - nRecus ? 'recus' : 'opc'));
     return cat;
