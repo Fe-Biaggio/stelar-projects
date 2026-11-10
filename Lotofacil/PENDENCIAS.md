@@ -15,6 +15,13 @@
   aleatórios de comparação, conferência com prêmio, desempenho e validação histórica.
 - GitHub Actions busca resultados 2x por dia e publica o site.
 
+## Feito (10/11/2026)
+- Cores verde claro / bege claro / branco (tema claro fixo).
+- "Todas as combinações" com limite de 1000 jogos.
+- Fechamento com garantia (guloso, `js/extras.js`), aviso/filtro de combinações populares, retorno
+  esperado e risco (simulação), testes estatísticos (qui-quadrado, autocorrelação) e ciclo das dezenas.
+- Achado: no histórico completo as dezenas não saem uniformes (p < 0,001), mas nos últimos 500/100 sim.
+
 ## Limitações conhecidas
 - No site público os dados ficam só no navegador (backup em Ajustes). Multiusuário de verdade = link do Claude.
 - O link do Claude não consegue buscar na Caixa (bloqueado); ele usa o arquivo publicado + resultados digitados.

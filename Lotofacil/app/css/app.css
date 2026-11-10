@@ -265,3 +265,4 @@ details[open] > summary { margin-bottom: 10px; }
 }
 .confirma { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: var(--recus-fundo); padding: 8px 12px; border-radius: 8px; }
 textarea.copia { width: 100%; min-height: 120px; font: 0.85rem var(--font-num); background: var(--papel); border: 1px solid var(--linha); border-radius: 8px; padding: 8px; color: var(--tinta); }
+.quebra td:first-child { white-space: normal; min-width: 110px; }

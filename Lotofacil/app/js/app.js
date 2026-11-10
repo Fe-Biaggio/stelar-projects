@@ -75,6 +75,9 @@
     const draws = LF.dados.draws;
     A.analise = LF.analisar(draws, undefined, A.m ? A.m.pesos : null, { completo: true });
     A.estudo = LF.estudoMetricas(draws);
+    A.testes = LF.testesEstatisticos(draws);
+    A.ciclos = LF.ciclos(draws);
+    A.valoresMedios = LF.valoresMedios(draws);
     if (!A.m) novoMontar();
     else if (A.m.alvo <= LF.dados.ultimo().c) A.m.alvo = LF.dados.ultimo().c + 1;
   }
@@ -90,6 +93,8 @@
       tamanho: ant ? ant.tamanho : 15,
       porOrcamento: ant ? ant.porOrcamento : false,
       todas: ant ? ant.todas : false,
+      evitarPopulares: ant ? ant.evitarPopulares : true,
+      fech: ant ? ant.fech : { m: 15, t: 14 },
       quantidade: ant ? ant.quantidade : 20,
       orcamento: ant ? ant.orcamento : 100,
       filtros: manter && ant ? ant.filtros : LF.filtrosPadrao(A.estudo),
@@ -360,8 +365,61 @@
         <tbody>${lc('linhas')}${lc('colunas')}</tbody></table>
         <p class="suave peq" style="margin-top:6px">*Média no concurso seguinte a jogos em que a linha/coluna teve a mesma quantidade do último.</p></div>
       </div>
-    </div>`;
+    </div>
+    ${blocoTestes()}
+    ${blocoCiclo()}`;
   };
+
+  // Testes estatísticos: os padrões são reais ou acaso?
+  function blocoTestes() {
+    const T = A.testes;
+    const pTxt = (p) => (p < 0.001 ? '< 0,001' : LF.num(p, 3));
+    const veredito = (p) => (p < 0.01 ? '<span class="neg">fora do esperado</span>' : '<span class="pos">compatível com acaso</span>');
+    const nomes = { pares: 'Pares', baixos: 'Baixas (1–13)', soma: 'Soma', moldura: 'Moldura', primos: 'Primos' };
+    const qui = [
+      ['Histórico completo', T.total],
+      ['Últimos 500', T.ult500],
+      ['Últimos 100', T.ult100],
+    ]
+      .map(([n, q]) => `<tr><td>${n}</td><td class="num">${q.N}</td><td class="num">${LF.num(q.X, 1)}</td><td class="num">${pTxt(q.p)}</td><td>${veredito(q.p)}</td></tr>`)
+      .join('');
+    const auto = Object.entries(T.auto)
+      .map(([k, a]) => `<tr><td>${nomes[k]}</td><td class="num">${LF.num(a.r, 3)}</td><td class="num">${pTxt(a.p)}</td><td>${veredito(a.p)}</td></tr>`)
+      .join('');
+    return `<div class="bloco"><h2>Os padrões são reais ou acaso?</h2>
+      <p class="suave peq">O p-valor diz a chance de ver um desvio desse tamanho num sorteio perfeitamente aleatório. Abaixo de 0,01 é sinal de algo real.</p>
+      <div class="grade2">
+        <div><h3>As 25 dezenas saem por igual? (qui-quadrado)</h3>
+          <div class="tabela-wrap"><table class="quebra"><thead><tr><th>Período</th><th>Concursos</th><th>χ²</th><th>p-valor</th><th></th></tr></thead><tbody>${qui}</tbody></table></div>
+          <p class="peq" style="margin-top:6px">${T.total.p < 0.01 && T.ult500.p >= 0.01
+            ? 'No histórico completo algumas dezenas saíram mais que outras além do acaso, mas nos concursos recentes isso some. O mais provável é que tenha mudado algo no sorteio ao longo dos anos (equipamento, bolas). Por isso o peso "Equilíbrio de longo prazo" deve ser usado com cuidado.'
+            : 'O resultado mostra se a diferença de frequência entre as dezenas é maior do que o acaso explicaria.'}</p></div>
+        <div><h3>Existe "compensação" de um concurso para o outro?</h3>
+          <div class="tabela-wrap"><table class="quebra"><thead><tr><th>Métrica</th><th>Correlação</th><th>p-valor</th><th></th></tr></thead><tbody>${auto}</tbody></table></div>
+          <p class="peq" style="margin-top:6px">Correlação perto de zero quer dizer que o valor de um concurso não ajuda a prever o seguinte. Se houvesse compensação (muitas pares → poucas pares), ela seria negativa e significativa.
+          Repetidas do anterior: média ${LF.num(T.repetidas.media, 2)}, esperado ao acaso ${T.repetidas.esperado}.</p></div>
+      </div></div>`;
+  }
+
+  function blocoCiclo() {
+    const C = A.ciclos;
+    const ks = Object.keys(C.dist).map(Number);
+    const maxQ = Math.max(...Object.values(C.dist));
+    const hist = [];
+    for (let k = Math.min(...ks); k <= Math.max(...ks); k++)
+      hist.push(`<i class="${k === C.atual ? 'ult' : ''}" style="height:${((C.dist[k] || 0) / maxQ) * 100}%" title="${k} concursos: ${C.dist[k] || 0} ciclos"></i>`);
+    return `<div class="bloco"><h2>Ciclo das dezenas</h2>
+      <p class="suave peq">Um ciclo termina quando todas as 25 dezenas já saíram pelo menos uma vez. Métrica popular entre apostadores; como as outras, não muda a chance de cada dezena.</p>
+      <div class="kpis">
+        <div class="kpi"><div class="rotulo">Ciclo atual</div><div class="v">${C.atual} ${C.atual === 1 ? 'concurso' : 'concursos'}</div></div>
+        <div class="kpi"><div class="rotulo">Duração média</div><div class="v">${LF.num(C.media, 1)}</div></div>
+        <div class="kpi"><div class="rotulo">Ciclos completos</div><div class="v">${C.tamanhos.length}</div></div>
+      </div>
+      <div><div class="rotulo" style="margin-bottom:4px">Faltam sair neste ciclo${C.inicio ? ` (começou no concurso ${C.inicio})` : ''}</div>
+        ${C.faltam.length ? `<div class="linha">${C.faltam.map((n) => `<span class="bola-p">${LF.dd(n)}</span>`).join('')}</div>` : '<p class="suave peq">Nenhuma: o ciclo acabou de fechar.</p>'}</div>
+      <div><div class="rotulo" style="margin-bottom:4px">Quantos concursos os ciclos costumam durar (de ${Math.min(...ks)} a ${Math.max(...ks)})</div><div class="hist-mini">${hist.join('')}</div></div>
+    </div>`;
+  }
 
   function cartaoMetrica(md, s) {
     const ks = Object.keys(s.dist).map(Number);
@@ -487,9 +545,11 @@
       <div class="bloco">
         <h2>2. Formato e quantidade</h2>
         <div class="seg" role="group"><button class="${M.formato === 'varios' ? 'on' : ''}" data-acao="formato" data-f="varios">Vários jogos de 15</button>
-          <button class="${M.formato === 'grande' ? 'on' : ''}" data-acao="formato" data-f="grande">Jogo com mais dezenas</button></div>
+          <button class="${M.formato === 'grande' ? 'on' : ''}" data-acao="formato" data-f="grande">Jogo com mais dezenas</button>
+          <button class="${M.formato === 'fechamento' ? 'on' : ''}" data-acao="formato" data-f="fechamento">Fechamento (garantia)</button></div>
         ${M.formato === 'grande' ? `<label class="linha">Dezenas por jogo <select class="in" id="tamanho">${[16, 17, 18, 19, 20].map((t) => `<option ${M.tamanho === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
           <span class="suave peq">${LF.comb(M.tamanho, 15)} apostas de 15 dentro de cada jogo</span></label>` : ''}
+        ${M.formato === 'fechamento' ? blocoFechamento(c) : `
         <div class="seg" role="group"><button class="${!M.porOrcamento && !M.todas ? 'on' : ''}" data-acao="por-orc" data-v="0">Número de jogos</button>
           <button class="${M.porOrcamento ? 'on' : ''}" data-acao="por-orc" data-v="1">Valor máximo (R$)</button>
           <button class="${M.todas ? 'on' : ''}" data-acao="por-orc" data-v="2">Todas as combinações</button></div>
@@ -508,11 +568,45 @@
         ${M.tamanho === 15 && !M.todas ? `<details><summary>3. Filtros dos jogos (padrões do histórico)</summary>
           <p class="suave peq" style="margin-bottom:8px">Só entram jogos dentro dessas faixas. Os valores sugeridos vêm do que costuma sair depois de um concurso como o último.</p>
           <div class="filtros">${filtros}</div><div class="linha" style="margin-top:10px"><button class="btn peq" data-acao="filtros-padrao">Voltar ao padrão</button></div></details>` : ''}
-        <button class="btn pri" data-acao="gerar" ${q < 1 || falta < 0 || falta > c.opc ? 'disabled' : ''}>Gerar ${q} ${q === 1 ? 'jogo' : 'jogos'}</button>
+        ${!M.todas ? `<label class="linha peq"><input type="checkbox" id="evitarPopulares" ${M.evitarPopulares ? 'checked' : ''}> Evitar combinações populares
+          <span class="suave">(sequências longas, desenhos no volante, cópia de resultado recente)</span></label>` : ''}
+        <button class="btn pri" data-acao="gerar" ${q < 1 || falta < 0 || falta > c.opc ? 'disabled' : ''}>Gerar ${q} ${q === 1 ? 'jogo' : 'jogos'}</button>`}
       </div>
     </div>
     ${A.gerado ? telaGerado() : ''}`;
   };
+
+  // Fechamento: dezenas = obrigatórias + opcionais; garante t acertos se m delas saírem.
+  function blocoFechamento(c) {
+    const M = A.m, v = c.obrig + c.opc;
+    const F = A.fechando;
+    let corpo;
+    if (v < 16 || v > 20) {
+      corpo = `<div class="alerta">O fechamento usa as obrigatórias + opcionais juntas, e precisa de 16 a 20 dezenas. Agora são <b>${v}</b>:
+        ${v > 20 ? `recuse mais ${v - 20}.` : `deixe mais ${16 - v} como opcional.`}</div>`;
+    } else {
+      const ms = [];
+      for (let m = Math.max(11, v - 10); m <= 15; m++) ms.push(m);
+      if (!ms.includes(M.fech.m)) M.fech.m = 15;
+      if (M.fech.t > M.fech.m) M.fech.t = M.fech.m;
+      const viavel = (m) => LF.custoFechamento(v, m) <= 4e8;
+      if (!viavel(M.fech.m)) M.fech.m = 15;
+      corpo = `<p class="peq">Com as suas <b>${v} dezenas</b> (obrigatórias + opcionais), o app monta o menor número de jogos de 15 que conseguir com esta garantia:</p>
+        <div class="linha peq"><label class="linha">Se saírem <select class="in" id="fechM">${ms
+          .map((m) => `<option value="${m}" ${M.fech.m === m ? 'selected' : ''} ${viavel(m) ? '' : 'disabled'}>${m}</option>`)
+          .join('')}</select> das ${v}</label>
+          <label class="linha">pelo menos um jogo faz <select class="in" id="fechT">${[11, 12, 13, 14]
+            .filter((t) => t <= M.fech.m)
+            .map((t) => `<option ${M.fech.t === t ? 'selected' : ''}>${t}</option>`)
+            .join('')}</select> acertos</label></div>
+        <p class="suave peq">A chance de acertar não muda: o fechamento só garante um prêmio mínimo <i>se</i> o sorteio cair nas suas dezenas, gastando bem menos que todas as combinações (${LF.num(LF.comb(v, 15))} jogos).
+        A garantia é sobre as suas ${v} dezenas: se saírem menos de ${M.fech.m} delas, não há garantia.</p>
+        <label class="linha peq">Concurso <input class="in curto" type="number" id="alvo" value="${M.alvo}"></label>
+        ${F ? `<div class="progresso"><i id="fProg" style="width:${F.prog * 100}%"></i></div><p class="suave peq">Calculando o fechamento…</p>` : ''}
+        <button class="btn pri" data-acao="gerar" ${F ? 'disabled' : ''}>Calcular fechamento</button>`;
+    }
+    return corpo;
+  }
 
   function telaGerado() {
     const G = A.gerado;
@@ -524,12 +618,19 @@
       arr
         .map((mk, i) => {
           const f = LF.metricas(mk, ultimo);
-          return `<div class="jogo"><span class="tag">${pref}${i + 1}</span>${bolas(mk, { num: true })}<span class="info">${LF.pop(mk) === 15 ? `${f.pares}P · ${f.soma}` : LF.pop(mk) + ' dez.'}</span></div>`;
+          const popu = LF.popularidade(mk, LF.dados.draws);
+          return `<div class="jogo"><span class="tag">${pref}${i + 1}</span>${bolas(mk, { num: true })}<span class="info">${LF.pop(mk) === 15 ? `${f.pares}P · ${f.soma}` : LF.pop(mk) + ' dez.'}${
+            popu.length ? `<br><span class="neg" title="${esc(popu.join('; '))}">popular</span>` : ''
+          }</span></div>`;
         })
         .join('');
+    const populares = G.jogos.filter((mk) => LF.popularidade(mk, LF.dados.draws).length).length;
     return `<div class="bloco" id="gerado">
       <div class="linha entre"><h2>Jogos gerados (${G.jogos.length})</h2><span class="suave">Concurso ${G.alvo} · ${LF.reais(G.custo)}</span></div>
+      ${G.garantia ? `<div class="nota"><b>Garantia do fechamento:</b> ${esc(G.garantia)}.</div>` : ''}
       ${G.avisos.map((t) => `<div class="alerta">${esc(t)}</div>`).join('')}
+      ${populares ? `<div class="alerta">${populares} ${populares === 1 ? 'jogo tem' : 'jogos têm'} padrão popular (marcados abaixo). A chance é a mesma, mas um prêmio de 14 ou 15 tende a ser dividido com mais gente.</div>` : ''}
+      ${blocoRisco(G.sim, G.simAlea)}
       <div><div class="rotulo" style="margin-bottom:4px">Quantas vezes cada dezena aparece nos jogos</div>
         <div class="freq" style="height:40px">${uso.slice(1).map((v, k) => `<i style="height:${(v / maxU) * 100}%" title="${LF.dd(k + 1)}: ${v} jogos"></i>`).join('')}</div>
         <div class="bolas cab-bolas mostra-num" style="margin-top:3px">${Array.from({ length: 25 }, (_, k) => `<span class="b">${LF.dd(k + 1)}</span>`).join('')}</div></div>
@@ -548,22 +649,71 @@
     </div>`;
   }
 
-  function gerar() {
+  // Retorno esperado e chances, comparando com os aleatórios.
+  function blocoRisco(s, sa) {
+    if (!s) return '';
+    const pct = (x) => (x < 0.001 && x > 0 ? '< 0,1%' : LF.num(x * 100, 1) + '%');
+    const lin = (nome, a, b) => `<tr><td>${nome}</td><td class="num"><b>${a}</b></td><td class="num">${b}</td></tr>`;
+    return `<div><h3 style="margin-bottom:6px">Retorno esperado e risco</h3><div class="tabela-wrap"><table class="quebra"><thead><tr><th></th><th>Seus jogos</th><th>Aleatórios</th></tr></thead><tbody>
+      ${lin('Retorno médio esperado', `${LF.reais(s.ev)}<br>${pct(s.retorno)}`, sa ? `${LF.reais(sa.ev)}<br>${pct(sa.retorno)}` : '–')}
+      ${lin('Chance de algum jogo com 11+', pct(s.p11), sa ? pct(sa.p11) : '–')}
+      ${lin('Chance de algum jogo com 13+', pct(s.p13), sa ? pct(sa.p13) : '–')}
+      ${lin('Chance de algum jogo com 14+', pct(s.p14), sa ? pct(sa.p14) : '–')}
+      ${lin('Chance de lucro (prêmio ≥ custo)', pct(s.pLucro), sa ? pct(sa.pLucro) : '–')}
+      ${lin('Chance de não ganhar nada', pct(s.pNada), sa ? pct(sa.pNada) : '–')}
+      </tbody></table></div>
+      <p class="suave peq">${LF.num(s.sims)} sorteios simulados. Prêmios de 14 e 15 pela média dos últimos 100 concursos. O retorno médio é o mesmo para quaisquer jogos do mesmo tamanho;
+      o que a montagem muda é a distribuição: jogos mais variados dão mais chance de algum prêmio pequeno, jogos parecidos concentram tudo num resultado.</p></div>`;
+  }
+
+  async function gerar() {
     const M = A.m;
-    const { q, custo } = quantidadeJogos();
     const scores = {};
     A.analise.nums.forEach((x) => (scores[x.n] = x.score));
-    if (q < 1) return aviso('Nenhum jogo para gerar com essa configuração.');
-    const r = LF.gerarJogos({ cat: M.cat, scores, tamanho: M.tamanho, quantidade: q, filtros: M.todas ? null : M.filtros, ultimoMask: LF.dados.ultimo().m });
-    if (r.erro) return aviso(r.erro);
-    const qtd = r.jogos.length;
+    let jogos, avisos = [], garantia = null;
+    if (M.formato === 'fechamento') {
+      if (A.fechando) return;
+      const S = A.analise.nums.filter((x) => M.cat[x.n] !== 'recus').sort((p, q) => q.score - p.score).map((x) => x.n);
+      A.fechando = { prog: 0 };
+      render();
+      try {
+        jogos = await LF.fechamento(S, M.fech.m, M.fech.t, (p) => {
+          A.fechando.prog = p;
+          const b = $('#fProg');
+          if (b) b.style.width = p * 100 + '%';
+        });
+      } catch (e) {
+        A.fechando = null;
+        render();
+        return aviso(e.message);
+      }
+      A.fechando = null;
+      garantia = `se ${M.fech.m} das suas ${S.length} dezenas (${S.sort((a, b) => a - b).map(LF.dd).join(' ')}) forem sorteadas, pelo menos um jogo faz ${M.fech.t} acertos`;
+    } else {
+      const { q } = quantidadeJogos();
+      if (q < 1) return aviso('Nenhum jogo para gerar com essa configuração.');
+      const draws = LF.dados.draws;
+      const r = LF.gerarJogos({
+        cat: M.cat, scores, tamanho: M.tamanho, quantidade: q, filtros: M.todas ? null : M.filtros, ultimoMask: LF.dados.ultimo().m,
+        excluir: !M.todas && M.evitarPopulares ? (mk) => LF.popularidade(mk, draws).length > 0 : null,
+      });
+      if (r.erro) return aviso(r.erro);
+      jogos = r.jogos;
+      avisos = r.avisos;
+    }
+    const tam = M.formato === 'fechamento' ? 15 : M.tamanho;
+    const aleatorios = LF.jogosAleatorios(jogos.length, tam);
     A.gerado = {
-      jogos: r.jogos,
-      aleatorios: LF.jogosAleatorios(qtd, M.tamanho),
-      avisos: r.avisos,
+      jogos,
+      aleatorios,
+      avisos,
+      garantia,
+      formato: M.formato,
       alvo: M.alvo,
-      tamanho: M.tamanho,
-      custo: qtd * LF.precoAposta(M.tamanho, A.preco15),
+      tamanho: tam,
+      custo: jogos.length * LF.precoAposta(tam, A.preco15),
+      sim: LF.simularAposta(jogos, A.preco15, A.valoresMedios),
+      simAlea: LF.simularAposta(aleatorios, A.preco15, A.valoresMedios),
       salvo: false,
     };
     render();
@@ -592,6 +742,14 @@
       recus: masks.recus,
       pesos: { ...M.pesos },
       baseConcurso: LF.dados.ultimo().c,
+      // análise salva junto com a aposta
+      formato: G.formato,
+      garantia: G.garantia,
+      filtros: G.formato !== 'fechamento' && !M.todas ? JSON.parse(JSON.stringify(M.filtros)) : null,
+      evitarPopulares: !!M.evitarPopulares,
+      sim: G.sim,
+      simAlea: G.simAlea,
+      pontos: Object.fromEntries(A.analise.nums.map((x) => [x.n, Math.round(x.score * 100) / 100])),
     };
     try {
       await A.store.salvarAposta(aposta);
@@ -712,6 +870,9 @@
     return `<div class="cab"><div><button class="btn peq" data-acao="fechar-aposta">← Minhas apostas</button>
       <h1 style="margin-top:10px">Concurso ${ap.concurso}</h1><p class="suave">${ap.jogos.length} jogos de ${ap.tamanho} dezenas · ${LF.reais(ap.custo)} · criada em ${LF.dataBR(ap.criadoEm)} com dados até o concurso ${ap.baseConcurso}</p></div></div>
       ${conferencia}
+      ${ap.sim || ap.garantia ? `<div class="bloco"><h2>Análise salva com a aposta</h2>
+        ${ap.garantia ? `<div class="nota"><b>Garantia do fechamento:</b> ${esc(ap.garantia)}.</div>` : ''}
+        ${blocoRisco(ap.sim, ap.simAlea)}</div>` : ''}
       <div class="bloco"><div class="linha entre"><h2>Seus jogos</h2><div class="linha">
         <button class="btn peq" data-acao="exportar" data-fmt="txt" data-de="${esc(ap.id)}">Baixar .txt</button>
         <button class="btn peq" data-acao="exportar" data-fmt="csv" data-de="${esc(ap.id)}">Baixar .csv</button>
@@ -953,7 +1114,7 @@
     },
     formato: (el) => {
       A.m.formato = el.dataset.f;
-      if (A.m.formato === 'varios') A.m.tamanho = 15;
+      if (A.m.formato === 'varios' || A.m.formato === 'fechamento') A.m.tamanho = 15;
       else {
         if (A.m.tamanho === 15) A.m.tamanho = 17;
         if (!A.m.porOrcamento) A.m.quantidade = 1;
@@ -1098,6 +1259,13 @@
       M.cat = LF.sugerirCategorias(A.analise, M.nObrig, M.nRecus);
       A.gerado = null;
       render();
+    } else if (t.id === 'fechM' || t.id === 'fechT') {
+      M.fech[t.id === 'fechM' ? 'm' : 't'] = +t.value;
+      A.gerado = null;
+      render();
+    } else if (t.id === 'evitarPopulares') {
+      M.evitarPopulares = t.checked;
+      A.gerado = null;
     } else if (t.id === 'tamanho') {
       M.tamanho = +t.value;
       A.gerado = null;

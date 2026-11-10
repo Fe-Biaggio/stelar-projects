@@ -20,6 +20,14 @@ comparar o resultado com jogos aleatórios.
 - **Montar jogos:** a análise dá pontos a cada dezena e sugere obrigatórias, opcionais e recusadas
   (toque na dezena para mudar). Escolha vários jogos de 15 ou um jogo de 16 a 20 dezenas, pela quantidade
   ou por valor máximo em R$. Filtros pelos padrões do histórico. Pesos de cada métrica ajustáveis.
+  Também "Todas as combinações" (até 1000 jogos) e **Fechamento**: com 16 a 20 dezenas, o menor número
+  de jogos que garante X acertos se Y das suas dezenas saírem (ex.: 18 dezenas, 14 pontos se saírem 15 = 24 jogos).
+- **Combinações populares:** marca e (opcionalmente) evita sequências longas, desenhos no volante e cópias
+  de resultados recentes, que dividem o prêmio de 14/15 com mais gente.
+- **Retorno esperado e risco:** antes de salvar, retorno médio (~45% do valor) e chances de algum 11+,
+  13+, 14+, lucro e de não ganhar nada, por simulação, comparando com os aleatórios. Fica salvo na aposta.
+- **Testes estatísticos e ciclo:** qui-quadrado das 25 dezenas e correlação entre concursos seguidos
+  (existe "compensação"?), e o ciclo das dezenas.
 - **Exportar:** .txt (uma linha por jogo), .csv ou copiar.
 - **Jogos aleatórios de comparação:** cada aposta salva leva a mesma quantidade de jogos aleatórios.
 - **Conferência:** quando o resultado sai, mostra acertos, prêmio e saldo dos seus jogos e dos aleatórios.

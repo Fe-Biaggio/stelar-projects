@@ -71,7 +71,7 @@
     const add = (lista) => {
       const mk = obrigMask | LF.maskDe(lista);
       if (cand.has(mk)) return;
-      if (!passaFiltros(mk, filtrar, cfg.ultimoMask)) {
+      if (!passaFiltros(mk, filtrar, cfg.ultimoMask) || (cfg.excluir && cfg.excluir(mk))) {
         reprovados++;
         return;
       }
