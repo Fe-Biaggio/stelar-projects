@@ -114,7 +114,7 @@ input[type="number"] { font-family: var(--font-num); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { border: 1px solid var(--linha); background: var(--papel); border-radius: 999px; padding: 4px 12px; cursor: pointer; font-size: 0.88rem; font-weight: 600; }
 .chip.on { background: var(--tinta); color: var(--papel); border-color: var(--tinta); }
-.seg { display: inline-flex; border: 1px solid var(--linha); border-radius: 8px; overflow: hidden; }
+.seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--linha); border-radius: 8px; overflow: hidden; align-self: flex-start; }
 .seg button { border: 0; background: var(--cartao); padding: 7px 12px; cursor: pointer; font-weight: 600; }
 .seg button.on { background: var(--tinta); color: var(--papel); }
 

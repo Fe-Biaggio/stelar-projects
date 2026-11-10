@@ -89,6 +89,7 @@
       formato: ant ? ant.formato : 'varios',
       tamanho: ant ? ant.tamanho : 15,
       porOrcamento: ant ? ant.porOrcamento : false,
+      todas: ant ? ant.todas : false,
       quantidade: ant ? ant.quantidade : 20,
       orcamento: ant ? ant.orcamento : 100,
       filtros: manter && ant ? ant.filtros : LF.filtrosPadrao(A.estudo),
@@ -396,11 +397,36 @@
     for (let n = 1; n <= 25; n++) c[A.m.cat[n]]++;
     return c;
   }
+  const LIMITE_JOGOS = 1000;
   function quantidadeJogos() {
     const M = A.m;
+    const c = contarCat();
+    const falta = M.tamanho - c.obrig;
+    const total = falta >= 0 && falta <= c.opc ? LF.comb(c.opc, falta) : 0;
     const preco = LF.precoAposta(M.tamanho, A.preco15);
-    const q = M.porOrcamento ? Math.floor((M.orcamento + 1e-9) / preco) : M.quantidade;
-    return { preco, q: Math.max(0, Math.min(q, 1000)), custo: Math.max(0, Math.min(q, 1000)) * preco };
+    let q = M.todas ? total : M.porOrcamento ? Math.floor((M.orcamento + 1e-9) / preco) : M.quantidade;
+    const excede = M.todas && total > LIMITE_JOGOS;
+    q = excede ? 0 : Math.max(0, Math.min(q, LIMITE_JOGOS));
+    return { preco, q, custo: q * preco, total, excede, falta, c };
+  }
+
+  // Quantas dezenas a mais recusar (ou fixar) para todas as combinações caberem em 1000 jogos.
+  function ajusteParaLimite(c, falta) {
+    let recusar = null, fixar = null;
+    for (let k = 1; c.opc - k >= falta; k++)
+      if (LF.comb(c.opc - k, falta) <= LIMITE_JOGOS) {
+        recusar = k;
+        break;
+      }
+    for (let j = 1; j <= falta; j++)
+      if (LF.comb(c.opc - j, falta - j) <= LIMITE_JOGOS) {
+        fixar = j;
+        break;
+      }
+    return { recusar, fixar };
+  }
+  function opcionaisPorPontuacao() {
+    return A.analise.nums.filter((x) => A.m.cat[x.n] === 'opc').sort((p, q) => p.score - q.score);
   }
 
   TELAS.montar = () => {
@@ -423,9 +449,17 @@
         <input type="range" min="0" max="2" step="0.1" value="${M.pesos[p]}" data-peso="${p}"><span class="num">${LF.num(M.pesos[p], 1)}</span></label>`
       )
       .join('');
-    const { preco, q, custo } = quantidadeJogos();
-    const falta = M.tamanho - c.obrig;
-    const comb = falta >= 0 && falta <= c.opc ? LF.comb(c.opc, falta) : 0;
+    const { preco, q, custo, total: comb, excede, falta } = quantidadeJogos();
+    let blocoTodas = '';
+    if (M.todas && falta >= 0 && falta <= c.opc) {
+      if (excede) {
+        const aj = ajusteParaLimite(c, falta);
+        blocoTodas = `<div class="alerta">São <b>${LF.num(comb)}</b> combinações; o máximo é ${LIMITE_JOGOS} jogos. Toque em mais dezenas para recusá-las (ou fixá-las como obrigatórias) até caber.
+          <div class="linha" style="margin-top:8px">
+          ${aj.recusar ? `<button class="btn peq" data-acao="limite-recusar" data-k="${aj.recusar}">Recusar as ${aj.recusar} opcionais de menor pontuação</button>` : ''}
+          ${aj.fixar ? `<button class="btn peq" data-acao="limite-fixar" data-k="${aj.fixar}">Fixar as ${aj.fixar} opcionais de maior pontuação</button>` : ''}</div></div>`;
+      } else blocoTodas = `<p class="peq">Todas as <b>${LF.num(comb)}</b> combinações das opcionais serão geradas${M.tamanho === 15 ? ' (os filtros não são usados neste modo)' : ''}.</p>`;
+    }
     const filtros = LF.METRICAS.filter((md) => md.filtro)
       .map((md) => {
         const f = M.filtros[md.id], e = A.estudo[md.id];
@@ -456,9 +490,12 @@
           <button class="${M.formato === 'grande' ? 'on' : ''}" data-acao="formato" data-f="grande">Jogo com mais dezenas</button></div>
         ${M.formato === 'grande' ? `<label class="linha">Dezenas por jogo <select class="in" id="tamanho">${[16, 17, 18, 19, 20].map((t) => `<option ${M.tamanho === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
           <span class="suave peq">${LF.comb(M.tamanho, 15)} apostas de 15 dentro de cada jogo</span></label>` : ''}
-        <div class="seg" role="group"><button class="${!M.porOrcamento ? 'on' : ''}" data-acao="por-orc" data-v="0">Número de jogos</button>
-          <button class="${M.porOrcamento ? 'on' : ''}" data-acao="por-orc" data-v="1">Valor máximo (R$)</button></div>
-        ${M.porOrcamento
+        <div class="seg" role="group"><button class="${!M.porOrcamento && !M.todas ? 'on' : ''}" data-acao="por-orc" data-v="0">Número de jogos</button>
+          <button class="${M.porOrcamento ? 'on' : ''}" data-acao="por-orc" data-v="1">Valor máximo (R$)</button>
+          <button class="${M.todas ? 'on' : ''}" data-acao="por-orc" data-v="2">Todas as combinações</button></div>
+        ${M.todas
+          ? blocoTodas
+          : M.porOrcamento
           ? `<label class="linha">Quero gastar até R$ <input class="in curto" type="number" min="0" step="0.5" id="orcamento" value="${M.orcamento}"></label>`
           : `<label class="linha">Quantos jogos <input class="in curto" type="number" min="1" max="1000" id="quantidade" value="${M.quantidade}"></label>`}
         <div class="kpis">
@@ -468,7 +505,7 @@
         </div>
         <p class="suave peq">${falta < 0 ? `<span class="neg">Há mais obrigatórias (${c.obrig}) do que dezenas no jogo (${M.tamanho}).</span>` : falta > c.opc ? `<span class="neg">Faltam opcionais: precisa de ${falta}, há ${c.opc}.</span>` : `Cada jogo leva as ${c.obrig} obrigatórias + ${falta} das ${c.opc} opcionais: ${LF.num(comb)} combinações possíveis.`}</p>
         <label class="linha peq">Concurso <input class="in curto" type="number" id="alvo" value="${M.alvo}"></label>
-        ${M.tamanho === 15 ? `<details><summary>3. Filtros dos jogos (padrões do histórico)</summary>
+        ${M.tamanho === 15 && !M.todas ? `<details><summary>3. Filtros dos jogos (padrões do histórico)</summary>
           <p class="suave peq" style="margin-bottom:8px">Só entram jogos dentro dessas faixas. Os valores sugeridos vêm do que costuma sair depois de um concurso como o último.</p>
           <div class="filtros">${filtros}</div><div class="linha" style="margin-top:10px"><button class="btn peq" data-acao="filtros-padrao">Voltar ao padrão</button></div></details>` : ''}
         <button class="btn pri" data-acao="gerar" ${q < 1 || falta < 0 || falta > c.opc ? 'disabled' : ''}>Gerar ${q} ${q === 1 ? 'jogo' : 'jogos'}</button>
@@ -516,7 +553,8 @@
     const { q, custo } = quantidadeJogos();
     const scores = {};
     A.analise.nums.forEach((x) => (scores[x.n] = x.score));
-    const r = LF.gerarJogos({ cat: M.cat, scores, tamanho: M.tamanho, quantidade: q, filtros: M.filtros, ultimoMask: LF.dados.ultimo().m });
+    if (q < 1) return aviso('Nenhum jogo para gerar com essa configuração.');
+    const r = LF.gerarJogos({ cat: M.cat, scores, tamanho: M.tamanho, quantidade: q, filtros: M.todas ? null : M.filtros, ultimoMask: LF.dados.ultimo().m });
     if (r.erro) return aviso(r.erro);
     const qtd = r.jogos.length;
     A.gerado = {
@@ -925,6 +963,23 @@
     },
     'por-orc': (el) => {
       A.m.porOrcamento = el.dataset.v === '1';
+      A.m.todas = el.dataset.v === '2';
+      A.gerado = null;
+      render();
+    },
+    'limite-recusar': (el) => {
+      opcionaisPorPontuacao()
+        .slice(0, +el.dataset.k)
+        .forEach((x) => (A.m.cat[x.n] = 'recus'));
+      A.gerado = null;
+      render();
+    },
+    'limite-fixar': (el) => {
+      opcionaisPorPontuacao()
+        .reverse()
+        .slice(0, +el.dataset.k)
+        .forEach((x) => (A.m.cat[x.n] = 'obrig'));
+      A.gerado = null;
       render();
     },
     gerar: () => gerar(),
