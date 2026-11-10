@@ -348,7 +348,7 @@
     </div>
     <div class="bloco">
       <h2>O último concurso (${ult.c}) e o que costuma vir depois</h2>
-      <p class="suave peq">Barra roxa = valor do último concurso. Barras verdes = faixa onde caiu a maioria dos concursos seguintes a um jogo parecido.</p>
+      <p class="suave peq">Barra verde-escura = valor do último concurso. Barras verde-claras = faixa onde caiu a maioria dos concursos seguintes a um jogo parecido.</p>
       <div class="metricas">${cartoes}</div>
     </div>
     <div class="bloco">
